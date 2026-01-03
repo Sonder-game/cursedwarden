@@ -1,13 +1,16 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
+use crate::plugins::items::ItemDatabase;
+use rand::Rng;
 
 pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui,));
+           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui,))
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)));
     }
 }
 
@@ -17,6 +20,9 @@ pub struct InventorySlot {
     pub x: i32,
     pub y: i32,
 }
+
+#[derive(Component)]
+pub struct InventoryGridContainer;
 
 #[derive(Component)]
 pub struct Item;
@@ -58,8 +64,54 @@ impl Default for InventoryGridState {
     }
 }
 
+impl InventoryGridState {
+    pub fn is_area_free(&self, pos: IVec2, size: ItemSize, exclude_entity: Option<Entity>) -> bool {
+        // Check bounds
+        if pos.x < 0 || pos.y < 0 || pos.x + size.width > self.width || pos.y + size.height > self.height {
+            return false;
+        }
+
+        // Check collisions
+        for dy in 0..size.height {
+            for dx in 0..size.width {
+                let check_pos = IVec2::new(pos.x + dx, pos.y + dy);
+                if let Some(occupier) = self.cells.get(&check_pos) {
+                    if Some(*occupier) != exclude_entity {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    pub fn find_free_spot(&self, size: ItemSize) -> Option<IVec2> {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let pos = IVec2::new(x, y);
+                if self.is_area_free(pos, size, None) {
+                    return Some(pos);
+                }
+            }
+        }
+        None
+    }
+}
+
 // Systems
-fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGridState>) {
+fn resize_item_system(
+    mut q_items: Query<(&mut Node, &ItemSize), Changed<ItemSize>>,
+) {
+    for (mut node, size) in q_items.iter_mut() {
+        // 50px per slot + (size-1) * 2px gaps
+        let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+        let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+        node.width = Val::Px(width);
+        node.height = Val::Px(height);
+    }
+}
+
+fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridState>) {
     // Clear any previous state if needed, but ResMut handles current state
 
     // Root Node
@@ -78,6 +130,7 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
         .with_children(|parent| {
             // Inventory Grid Container
             parent.spawn((
+                InventoryGridContainer,
                 Node {
                     display: Display::Grid,
                     grid_template_columns: vec![GridTrack::px(50.0); grid_state.width as usize],
@@ -95,7 +148,7 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                 // Spawn Slots
                 for y in 0..grid_state.height {
                     for x in 0..grid_state.width {
-                       let slot_entity = grid_parent.spawn((
+                       grid_parent.spawn((
                             Node {
                                 width: Val::Px(50.0),
                                 height: Val::Px(50.0),
@@ -105,7 +158,7 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                             BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
                             BorderColor(Color::BLACK),
                             InventorySlot { x, y },
-                        )).id();
+                        ));
 
                         // We could populate grid_state here if we want to track slots,
                         // but usually grid_state tracks items.
@@ -114,36 +167,80 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                     }
                 }
 
-                // Spawn Test Item as CHILD of the Grid Container
-                // Initial Position: x=0, y=0 -> Left=10px, Top=10px (padding)
-                // 2x1 Item
-                let item_entity = grid_parent.spawn((
-                    Node {
-                        width: Val::Px(100.0 + 2.0), // 2 * 50px + 1 * 2px gap (approx logic)
-                        // Actually: 2 slots * 50px + 1 gap * 2px = 102px
-                        height: Val::Px(50.0),
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(10.0), // Padding
-                        top: Val::Px(10.0),  // Padding
-                        border: UiRect::all(Val::Px(2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.8, 0.2, 0.2)),
-                    BorderColor(Color::WHITE),
-                    Item,
-                    GridPosition { x: 0, y: 0 },
-                    ItemSize { width: 2, height: 1 },
-                ))
-                .observe(handle_drag_start)
-                .observe(handle_drag)
-                .observe(handle_drag_drop)
-                .id();
-
-                // Populate grid state with the test item
-                grid_state.cells.insert(IVec2::new(0, 0), item_entity);
-                grid_state.cells.insert(IVec2::new(1, 0), item_entity);
+                // Initial items are now spawned via systems or debug tools
             });
         });
+}
+
+fn debug_spawn_item_system(
+    mut commands: Commands,
+    input: Res<ButtonInput<KeyCode>>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    if input.just_pressed(KeyCode::Space) {
+        if let Ok(container) = q_container.get_single() {
+            // Pick a random item
+            let mut rng = rand::thread_rng();
+            let keys: Vec<&String> = item_db.items.keys().collect();
+            if keys.is_empty() { return; }
+            let random_key = keys[rng.gen_range(0..keys.len())];
+
+            if let Some(def) = item_db.items.get(random_key) {
+                 let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+
+                 // Find free spot
+                 if let Some(pos) = grid_state.find_free_spot(size) {
+                     // Spawn item
+
+                     // Calculate UI position
+                     let left = 10.0 + pos.x as f32 * 52.0;
+                     let top = 10.0 + pos.y as f32 * 52.0;
+                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+
+                     let item_entity = commands.spawn((
+                        Node {
+                            width: Val::Px(width),
+                            height: Val::Px(height),
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(left),
+                            top: Val::Px(top),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)), // Default color for spawned items
+                        BorderColor(Color::WHITE),
+                        Item,
+                        GridPosition { x: pos.x, y: pos.y },
+                        size,
+                        def.clone(), // Attach the definition
+                    ))
+                    .observe(handle_drag_start)
+                    .observe(handle_drag)
+                    .observe(handle_drag_drop)
+                    .id();
+
+                    // Add to grid state
+                    for dy in 0..size.height {
+                        for dx in 0..size.width {
+                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
+                        }
+                    }
+
+                    // Attach to container
+                    commands.entity(container).add_child(item_entity);
+
+                    info!("Spawned item {} at {:?}", def.name, pos);
+                 } else {
+                     warn!("No space for item {}", def.name);
+                 }
+            }
+        } else {
+            warn!("Grid container not found");
+        }
+    }
 }
 
 // Drag Handlers
@@ -207,71 +304,50 @@ fn handle_drag_drop(
 
     if dropped_on_slot {
         if let Ok((mut z_index, mut node, size, mut grid_pos)) = q_item.get_mut(entity) {
-             // Basic validation: Check bounds
-             if target_x >= 0 && target_y >= 0 &&
-                target_x + size.width <= grid_state.width &&
-                target_y + size.height <= grid_state.height
-             {
-                 // Check collisions
-                 let mut collision = false;
-                 // We need to check all cells the item would occupy
+             // Basic validation and collision check
+             if grid_state.is_area_free(IVec2::new(target_x, target_y), *size, Some(entity)) {
+                 // Clear old grid positions
                  for dy in 0..size.height {
                      for dx in 0..size.width {
-                         let check_pos = IVec2::new(target_x + dx, target_y + dy);
-                         if let Some(occupier) = grid_state.cells.get(&check_pos) {
-                             if *occupier != entity {
-                                 collision = true;
-                                 break;
+                         let old_pos = IVec2::new(grid_pos.x + dx, grid_pos.y + dy);
+                         if let Some(occupier) = grid_state.cells.get(&old_pos) {
+                             if *occupier == entity {
+                                 grid_state.cells.remove(&old_pos);
                              }
                          }
                      }
-                     if collision { break; }
                  }
 
-                 if !collision {
-                     // Clear old grid positions
-                     for dy in 0..size.height {
-                         for dx in 0..size.width {
-                             let old_pos = IVec2::new(grid_pos.x + dx, grid_pos.y + dy);
-                             if let Some(occupier) = grid_state.cells.get(&old_pos) {
-                                 if *occupier == entity {
-                                     grid_state.cells.remove(&old_pos);
-                                 }
-                             }
-                         }
+                 // Set new grid positions
+                 for dy in 0..size.height {
+                     for dx in 0..size.width {
+                         let new_pos = IVec2::new(target_x + dx, target_y + dy);
+                         grid_state.cells.insert(new_pos, entity);
                      }
-
-                     // Set new grid positions
-                     for dy in 0..size.height {
-                         for dx in 0..size.width {
-                             let new_pos = IVec2::new(target_x + dx, target_y + dy);
-                             grid_state.cells.insert(new_pos, entity);
-                         }
-                     }
-
-                     // If valid, snap to slot
-                     // Assuming 50px slots + 2px gaps + 10px padding.
-                     // Calculation: 10 + x * (50 + 2)
-                     let new_left = 10.0 + target_x as f32 * 52.0;
-                     let new_top = 10.0 + target_y as f32 * 52.0;
-
-                     node.left = Val::Px(new_left);
-                     node.top = Val::Px(new_top);
-
-                     // Update logical position
-                     grid_pos.x = target_x;
-                     grid_pos.y = target_y;
-
-                     // Restore Z-Index (maybe +1 so it sits above grid but not everything)
-                     if let Ok(original) = q_original.get(entity) {
-                          *z_index = original.z_index;
-                     } else {
-                          *z_index = ZIndex(0);
-                     }
-
-                     commands.entity(entity).remove::<DragOriginalPosition>();
-                     return;
                  }
+
+                 // If valid, snap to slot
+                 // Assuming 50px slots + 2px gaps + 10px padding.
+                 // Calculation: 10 + x * (50 + 2)
+                 let new_left = 10.0 + target_x as f32 * 52.0;
+                 let new_top = 10.0 + target_y as f32 * 52.0;
+
+                 node.left = Val::Px(new_left);
+                 node.top = Val::Px(new_top);
+
+                 // Update logical position
+                 grid_pos.x = target_x;
+                 grid_pos.y = target_y;
+
+                 // Restore Z-Index (maybe +1 so it sits above grid but not everything)
+                 if let Ok(original) = q_original.get(entity) {
+                      *z_index = original.z_index;
+                 } else {
+                      *z_index = ZIndex(0);
+                 }
+
+                 commands.entity(entity).remove::<DragOriginalPosition>();
+                 return;
              }
         }
     }
