@@ -4,7 +4,8 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
-        app.init_state::<GameState>();
+        app.init_state::<GameState>()
+           .add_sub_state::<DaySubState>();
     }
 }
 
@@ -20,5 +21,11 @@ pub enum GameState {
    GameOver,
 }
 
-// Sub-states or components can be added later as needed.
-// For now, keeping GameState simple to avoid complexity with enum variants in States.
+#[derive(SubStates, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
+#[source(GameState = GameState::DayPhase)]
+pub enum DaySubState {
+   #[default]
+   Idle,
+   Trading,
+   MapTravel,
+}

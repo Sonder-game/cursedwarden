@@ -10,9 +10,14 @@ impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui,))
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)));
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
+           .add_observer(attach_drag_observers);
     }
 }
+
+// Event triggered when an item is spawned (e.g. from load) and needs interactivity
+#[derive(Event)]
+pub struct ItemSpawnedEvent(pub Entity);
 
 // Components
 #[derive(Component, Debug, Clone, Copy)]
@@ -241,6 +246,17 @@ fn debug_spawn_item_system(
             warn!("Grid container not found");
         }
     }
+}
+
+fn attach_drag_observers(
+    trigger: Trigger<ItemSpawnedEvent>,
+    mut commands: Commands,
+) {
+    let entity = trigger.event().0;
+    commands.entity(entity)
+        .observe(handle_drag_start)
+        .observe(handle_drag)
+        .observe(handle_drag_drop);
 }
 
 // Drag Handlers
