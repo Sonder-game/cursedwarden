@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 
 mod plugins;
+#[cfg(test)]
+mod tests;
+
 use plugins::combat::CombatPlugin;
 use plugins::core::CorePlugin;
 use plugins::inventory::InventoryPlugin;
