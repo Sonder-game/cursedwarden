@@ -3,6 +3,7 @@ use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
 use crate::plugins::items::ItemDatabase;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 pub struct InventoryPlugin;
 
@@ -27,13 +28,13 @@ pub struct InventoryGridContainer;
 #[derive(Component)]
 pub struct Item;
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GridPosition {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ItemSize {
     pub width: i32,
     pub height: i32,
@@ -244,7 +245,7 @@ fn debug_spawn_item_system(
 }
 
 // Drag Handlers
-fn handle_drag_start(
+pub fn handle_drag_start(
     trigger: Trigger<Pointer<DragStart>>,
     mut commands: Commands,
     mut q_node: Query<(&mut ZIndex, &Node)>,
@@ -263,7 +264,7 @@ fn handle_drag_start(
     }
 }
 
-fn handle_drag(
+pub fn handle_drag(
     trigger: Trigger<Pointer<Drag>>,
     mut q_node: Query<&mut Node>,
 ) {
@@ -280,7 +281,7 @@ fn handle_drag(
     }
 }
 
-fn handle_drag_drop(
+pub fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
     mut q_item: Query<(&mut ZIndex, &mut Node, &ItemSize, &mut GridPosition), With<Item>>,

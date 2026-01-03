@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Resource, Default)]
 pub struct ItemDatabase {
     pub items: HashMap<String, ItemDefinition>,
 }
 
-#[derive(Debug, Clone, Deserialize, Component)]
+#[derive(Debug, Clone, Serialize, Deserialize, Component)]
 pub struct ItemDefinition {
     pub id: String,
     pub name: String,
@@ -20,7 +20,7 @@ pub struct ItemDefinition {
     // Add stats later as needed
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum MaterialType {
     Steel,
@@ -28,7 +28,7 @@ pub enum MaterialType {
     Flesh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ItemType {
     Weapon,
