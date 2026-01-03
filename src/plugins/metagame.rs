@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::plugins::items::ItemDefinition;
+use crate::plugins::inventory::IncomingItems;
+use rand::seq::IteratorRandom;
 
 // Re-export or redefine necessary types for serialization if they aren't in shared modules
 // Since ItemDefinition is in items.rs, we import it.
@@ -66,7 +68,121 @@ impl Plugin for MetagamePlugin {
         app.init_resource::<PlayerStats>()
            .init_resource::<GlobalTime>()
            .add_systems(OnEnter(DaySubState::Idle), day_start_logic)
-           .add_systems(Update, (save_system, load_system_debug, debug_scene_transition)); // Add keyboard triggers for now
+           .add_systems(OnEnter(GameState::DayPhase), spawn_city_ui)
+           .add_systems(OnExit(GameState::DayPhase), teardown_city_ui)
+           .add_systems(Update, (save_system, load_system_debug, debug_scene_transition, city_ui_interactions).run_if(in_state(GameState::DayPhase)));
+    }
+}
+
+// UI Markers
+#[derive(Component)]
+struct CityUiRoot;
+
+#[derive(Component)]
+struct HouseButton;
+
+#[derive(Component)]
+struct InventoryButton;
+
+fn spawn_city_ui(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.2, 0.2, 0.1)), // Muddy/City color
+        CityUiRoot,
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("CITY PHASE\nExplore houses to find items."),
+            TextFont { font_size: 30.0, ..default() },
+            TextColor(Color::WHITE),
+        ));
+
+        // Search House Button
+        parent.spawn((
+            Button,
+            Node {
+                width: Val::Px(250.0),
+                height: Val::Px(60.0),
+                margin: UiRect::all(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.3, 0.4, 0.3)),
+            BorderColor(Color::WHITE),
+            HouseButton,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Text::new("Scavenge House"),
+                TextFont { font_size: 20.0, ..default() },
+                TextColor(Color::WHITE),
+            ));
+        });
+
+        // Go to Inventory Button
+        parent.spawn((
+            Button,
+            Node {
+                width: Val::Px(250.0),
+                height: Val::Px(60.0),
+                margin: UiRect::all(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.4, 0.3, 0.3)),
+            BorderColor(Color::WHITE),
+            InventoryButton,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Text::new("Go to Inventory (Evening)"),
+                TextFont { font_size: 20.0, ..default() },
+                TextColor(Color::WHITE),
+            ));
+        });
+    });
+}
+
+fn teardown_city_ui(mut commands: Commands, q_root: Query<Entity, With<CityUiRoot>>) {
+    for e in q_root.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+}
+
+fn city_ui_interactions(
+    mut commands: Commands,
+    mut q_interaction: Query<(&Interaction, &BackgroundColor, Option<&HouseButton>, Option<&InventoryButton>), (Changed<Interaction>, With<Button>)>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut incoming: ResMut<IncomingItems>,
+    item_db: Res<ItemDatabase>,
+) {
+    for (interaction, _color, house_btn, inv_btn) in q_interaction.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            if house_btn.is_some() {
+                // Add random item
+                let mut rng = rand::thread_rng();
+                if let Some(key) = item_db.items.keys().choose(&mut rng) {
+                     if let Some(def) = item_db.items.get(key) {
+                         incoming.items.push(def.clone());
+                         info!("Found item: {}", def.name);
+                     }
+                }
+            } else if inv_btn.is_some() {
+                next_state.set(GameState::EveningPhase);
+            }
+        }
     }
 }
 

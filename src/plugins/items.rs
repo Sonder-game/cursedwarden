@@ -17,7 +17,13 @@ pub struct ItemDefinition {
     pub material: MaterialType,
     #[allow(dead_code)]
     pub item_type: ItemType,
-    // Add stats later as needed
+
+    #[serde(default)]
+    pub attack: f32,
+    #[serde(default)]
+    pub defense: f32,
+    #[serde(default)]
+    pub speed: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -34,7 +40,6 @@ pub enum ItemType {
     Weapon,
     Consumable,
     Ammo,
-    // Add others as needed
 }
 
 pub struct ItemsPlugin;
@@ -58,6 +63,9 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 2,
             material: MaterialType::Steel,
             item_type: ItemType::Weapon,
+            attack: 10.0,
+            defense: 2.0,
+            speed: 0.0,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -66,14 +74,31 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 1,
             material: MaterialType::Silver,
             item_type: ItemType::Weapon,
+            attack: 8.0,
+            defense: 1.0,
+            speed: 5.0,
         },
         ItemDefinition {
             id: "health_potion".to_string(),
             name: "Health Potion".to_string(),
             width: 1,
             height: 1,
-            material: MaterialType::Flesh, // Potions are weird in this setting? Or glass/fluid. GDD says flesh replaces steel.
+            material: MaterialType::Flesh,
             item_type: ItemType::Consumable,
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        },
+        ItemDefinition {
+            id: "heavy_shield".to_string(),
+            name: "Heavy Shield".to_string(),
+            width: 2,
+            height: 2,
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon, // Or Armor
+            attack: 2.0,
+            defense: 10.0,
+            speed: -5.0,
         },
     ];
 

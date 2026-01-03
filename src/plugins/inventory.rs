@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
-use crate::plugins::items::ItemDatabase;
+use crate::plugins::items::{ItemDatabase, ItemDefinition};
+use crate::plugins::metagame::SavedItem;
 use rand::Rng;
 
 pub struct InventoryPlugin;
@@ -9,8 +10,11 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui,))
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
+           .init_resource::<PersistentInventory>()
+           .init_resource::<IncomingItems>()
+           .add_systems(OnEnter(GameState::EveningPhase), (load_inventory_state, spawn_inventory_ui, populate_inventory_system).chain())
+           .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, teardown_inventory_ui))
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system, inventory_ui_interactions).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -29,6 +33,9 @@ pub struct InventorySlot {
 
 #[derive(Component)]
 pub struct InventoryGridContainer;
+
+#[derive(Component)]
+pub struct InventoryUiRoot;
 
 #[derive(Component)]
 pub struct Item;
@@ -68,6 +75,16 @@ impl Default for InventoryGridState {
             height: 8,
         }
     }
+}
+
+#[derive(Resource, Default)]
+pub struct PersistentInventory {
+    pub items: Vec<SavedItem>,
+}
+
+#[derive(Resource, Default)]
+pub struct IncomingItems {
+    pub items: Vec<ItemDefinition>,
 }
 
 impl InventoryGridState {
@@ -117,21 +134,150 @@ fn resize_item_system(
     }
 }
 
-fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridState>) {
-    // Clear any previous state if needed, but ResMut handles current state
+fn save_inventory_state(
+    mut persistent: ResMut<PersistentInventory>,
+    q_items: Query<(&ItemDefinition, &GridPosition), With<Item>>,
+) {
+    persistent.items.clear();
+    for (def, pos) in q_items.iter() {
+        persistent.items.push(SavedItem {
+            item_id: def.id.clone(),
+            grid_x: pos.x,
+            grid_y: pos.y,
+        });
+    }
+    info!("Saved {} items to PersistentInventory", persistent.items.len());
+}
 
-    // Root Node
+fn load_inventory_state(
+    mut grid_state: ResMut<InventoryGridState>,
+) {
+    // Clear current grid state (entities are cleared by teardown/despawn, but map needs reset)
+    grid_state.cells.clear();
+}
+
+// Split logic
+fn populate_inventory_system(
+    mut commands: Commands,
+    mut grid_state: ResMut<InventoryGridState>,
+    mut incoming: ResMut<IncomingItems>,
+    persistent: Res<PersistentInventory>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    if let Ok(container) = q_container.get_single() {
+        // 1. Restore persistent items
+        for saved_item in &persistent.items {
+             if let Some(def) = item_db.items.get(&saved_item.item_id) {
+                 spawn_item_entity(
+                     &mut commands,
+                     &mut grid_state,
+                     container,
+                     def.clone(),
+                     IVec2::new(saved_item.grid_x, saved_item.grid_y)
+                 );
+             }
+        }
+
+        // 2. Add incoming items
+        for def in incoming.items.drain(..) {
+            let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+            if let Some(pos) = grid_state.find_free_spot(size) {
+                spawn_item_entity(
+                     &mut commands,
+                     &mut grid_state,
+                     container,
+                     def.clone(),
+                     pos
+                );
+            } else {
+                warn!("No space for incoming item {}", def.name);
+                // Could push back to incoming or drop? For now drop.
+            }
+        }
+    }
+}
+
+// Helper
+fn spawn_item_entity(
+    commands: &mut Commands,
+    grid_state: &mut InventoryGridState,
+    container: Entity,
+    def: ItemDefinition,
+    pos: IVec2,
+) -> Entity {
+     let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+
+     // Visuals
+     let left = 10.0 + pos.x as f32 * 52.0;
+     let top = 10.0 + pos.y as f32 * 52.0;
+     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+
+     let item_entity = commands.spawn((
+        Node {
+            width: Val::Px(width),
+            height: Val::Px(height),
+            position_type: PositionType::Absolute,
+            left: Val::Px(left),
+            top: Val::Px(top),
+            border: UiRect::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
+        BorderColor(Color::WHITE),
+        Item,
+        GridPosition { x: pos.x, y: pos.y },
+        size,
+        def.clone(),
+    ))
+    .with_children(|parent| {
+         parent.spawn((
+             Text::new(&def.name),
+             TextFont {
+                 font_size: 14.0,
+                 ..default()
+             },
+             TextColor(Color::WHITE),
+             Node {
+                 position_type: PositionType::Absolute,
+                 left: Val::Px(2.0),
+                 top: Val::Px(2.0),
+                 ..default()
+             },
+         ));
+    })
+    .id();
+
+    // Trigger event to attach drag observers
+    commands.trigger(ItemSpawnedEvent(item_entity));
+
+    // Add to grid state
+    for dy in 0..size.height {
+        for dx in 0..size.width {
+            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
+        }
+    }
+
+    commands.entity(container).add_child(item_entity);
+    item_entity
+}
+
+
+fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridState>) {
     commands
         .spawn((
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 display: Display::Flex,
+                flex_direction: FlexDirection::Column, // Changed for Button
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
             BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+            InventoryUiRoot,
         ))
         .with_children(|parent| {
             // Inventory Grid Container
@@ -144,14 +290,13 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                     row_gap: Val::Px(2.0),
                     column_gap: Val::Px(2.0),
                     padding: UiRect::all(Val::Px(10.0)),
-                    // Ensure relative positioning context for children (items)
                     position_type: PositionType::Relative,
+                    margin: UiRect::bottom(Val::Px(20.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
             ))
             .with_children(|grid_parent| {
-                // Spawn Slots
                 for y in 0..grid_state.height {
                     for x in 0..grid_state.width {
                        grid_parent.spawn((
@@ -165,17 +310,55 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                             BorderColor(Color::BLACK),
                             InventorySlot { x, y },
                         ));
-
-                        // We could populate grid_state here if we want to track slots,
-                        // but usually grid_state tracks items.
-                        // However, collision logic needs to know if a slot exists?
-                        // Actually, slots are static. grid_state.cells usually tracks ITEMS occupying cells.
                     }
                 }
+            });
 
-                // Initial items are now spawned via systems or debug tools
+            // Start Night Button
+            parent.spawn((
+                Button,
+                Node {
+                    width: Val::Px(200.0),
+                    height: Val::Px(50.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.5, 0.0, 0.0)),
+                BorderColor(Color::WHITE),
+            ))
+            .with_children(|p| {
+                p.spawn((
+                    Text::new("START NIGHT (Combat)"),
+                    TextFont { font_size: 20.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
             });
         });
+}
+
+fn teardown_inventory_ui(
+    mut commands: Commands,
+    q_root: Query<Entity, With<InventoryUiRoot>>,
+) {
+    for e in q_root.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+}
+
+fn inventory_ui_interactions(
+    mut next_state: ResMut<NextState<GameState>>,
+    mut q_interaction: Query<(&Interaction, &BackgroundColor), (Changed<Interaction>, With<Button>)>,
+) {
+    for (interaction, _color) in q_interaction.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                next_state.set(GameState::NightPhase);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn debug_spawn_item_system(
@@ -198,69 +381,15 @@ fn debug_spawn_item_system(
 
                  // Find free spot
                  if let Some(pos) = grid_state.find_free_spot(size) {
-                     // Spawn item
-
-                     // Calculate UI position
-                     let left = 10.0 + pos.x as f32 * 52.0;
-                     let top = 10.0 + pos.y as f32 * 52.0;
-                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
-                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
-
-                     let item_entity = commands.spawn((
-                        Node {
-                            width: Val::Px(width),
-                            height: Val::Px(height),
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(left),
-                            top: Val::Px(top),
-                            border: UiRect::all(Val::Px(2.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)), // Default color for spawned items
-                        BorderColor(Color::WHITE),
-                        Item,
-                        GridPosition { x: pos.x, y: pos.y },
-                        size,
-                        def.clone(), // Attach the definition
-                    ))
-                    .with_children(|parent| {
-                         parent.spawn((
-                             Text::new(&def.name),
-                             TextFont {
-                                 font_size: 14.0,
-                                 ..default()
-                             },
-                             TextColor(Color::WHITE),
-                             Node {
-                                 position_type: PositionType::Absolute,
-                                 left: Val::Px(2.0),
-                                 top: Val::Px(2.0),
-                                 ..default()
-                             },
-                         ));
-                    })
-                    .observe(handle_drag_start)
-                    .observe(handle_drag)
-                    .observe(handle_drag_drop)
-                    .id();
-
-                    // Add to grid state
-                    for dy in 0..size.height {
-                        for dx in 0..size.width {
-                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
-                        }
-                    }
-
-                    // Attach to container
-                    commands.entity(container).add_child(item_entity);
-
-                    info!("Spawned item {} at {:?}", def.name, pos);
-                 } else {
-                     warn!("No space for item {}", def.name);
+                     spawn_item_entity(
+                         &mut commands,
+                         &mut grid_state,
+                         container,
+                         def.clone(),
+                         pos
+                     );
                  }
             }
-        } else {
-            warn!("Grid container not found");
         }
     }
 }

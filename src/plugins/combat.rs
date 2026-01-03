@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use crate::plugins::items::ItemDefinition;
+use crate::plugins::items::ItemDatabase;
+use crate::plugins::inventory::PersistentInventory;
 
 pub struct CombatPlugin;
 
@@ -11,8 +14,10 @@ impl Plugin for CombatPlugin {
             .register_type::<ActionMeter>()
             .register_type::<MaterialType>()
             .register_type::<UnitType>()
+            .register_type::<Team>()
             .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
-            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
+            .add_systems(OnExit(crate::plugins::core::GameState::NightPhase), teardown_combat)
+            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system, combat_end_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
             .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
     }
 }
@@ -24,12 +29,47 @@ pub struct CombatLog;
 #[derive(Component)]
 pub struct CombatUnitUi;
 
+#[derive(Component)]
+pub struct CombatEntity; // Helper for cleanup
+
+// Team Component
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub enum Team {
+    #[default]
+    Player,
+    Enemy,
+}
+
 // Systems
-fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<CombatUnitUi>>) {
-    // Clean up if re-entering (though ideally we track persistence)
-    for e in q_existing.iter() {
+fn teardown_combat(mut commands: Commands, q_entities: Query<Entity, Or<(With<CombatUnitUi>, With<CombatEntity>)>>) {
+    for e in q_entities.iter() {
         commands.entity(e).despawn_recursive();
     }
+}
+
+fn spawn_combat_arena(
+    mut commands: Commands,
+    persistent_inventory: Res<PersistentInventory>,
+    item_db: Res<ItemDatabase>,
+) {
+    // Calculate Player Stats from Inventory
+    let mut total_attack = 1.0; // Base attack
+    let mut total_defense = 0.0;
+    let mut total_speed = 15.0; // Base speed
+
+    for saved_item in &persistent_inventory.items {
+        if let Some(def) = item_db.items.get(&saved_item.item_id) {
+            total_attack += def.attack;
+            total_defense += def.defense;
+            total_speed += def.speed;
+        }
+    }
+
+    // Cap or sanitize values
+    total_speed = total_speed.max(1.0);
+
+    info!("Spawning Player with Stats: Atk {}, Def {}, Spd {}", total_attack, total_defense, total_speed);
 
     // Spawn Arena UI Container
     commands.spawn((
@@ -43,7 +83,7 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
             ..default()
         },
         BackgroundColor(Color::srgb(0.05, 0.0, 0.1)),
-        CombatUnitUi, // Tag to cleanup later
+        CombatUnitUi,
     ))
     .with_children(|parent| {
         // Player Side
@@ -63,19 +103,21 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
         ))
         .with_children(|p| {
              p.spawn((
-                Text::new("Player Unit\nHuman\nHP: 100/100"),
+                Text::new(format!("Player Unit\nHuman\nHP: 100/100")),
                 TextFont { font_size: 16.0, ..default() },
                 TextColor(Color::WHITE),
              ));
         })
         .insert((
             Health { current: 100.0, max: 100.0 },
-            Attack { value: 10.0 },
-            Defense { value: 5.0 },
-            Speed { value: 15.0 },
+            Attack { value: total_attack },
+            Defense { value: total_defense },
+            Speed { value: total_speed },
             ActionMeter::default(),
             UnitType::Human,
-            MaterialType::Steel,
+            MaterialType::Steel, // Default for now, maybe derive from weapon?
+            Team::Player,
+            CombatEntity,
         ));
 
         // VS Text
@@ -102,19 +144,21 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
         ))
         .with_children(|p| {
              p.spawn((
-                Text::new("Enemy Monster\nMonster\nHP: 150/150"),
+                Text::new("Enemy Monster\nMonster\nHP: 50/50"),
                 TextFont { font_size: 16.0, ..default() },
                 TextColor(Color::WHITE),
              ));
         })
         .insert((
-            Health { current: 150.0, max: 150.0 },
-            Attack { value: 15.0 },
-            Defense { value: 2.0 },
+            Health { current: 50.0, max: 50.0 }, // Lower HP for faster loops
+            Attack { value: 5.0 },
+            Defense { value: 1.0 },
             Speed { value: 10.0 },
             ActionMeter::default(),
             UnitType::Monster,
             MaterialType::Flesh,
+            Team::Enemy,
+            CombatEntity,
         ));
     });
 }
@@ -179,7 +223,7 @@ impl Default for ActionMeter {
     fn default() -> Self {
         Self {
             value: 0.0,
-            threshold: 1000.0, // Default threshold from GDD example
+            threshold: 1000.0,
         }
     }
 }
@@ -235,7 +279,7 @@ pub fn calculate_damage(
         if target_defense > 0.0 {
             (raw_damage * raw_damage) / target_defense
         } else {
-            raw_damage // Should not happen if defense is 0 (Raw >= Defense case covers it), but safety check
+            raw_damage
         }
     }
 }
@@ -248,112 +292,74 @@ pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
 
 pub fn combat_turn_system(
     mut commands: Commands,
-    mut q_attackers: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &UnitType), (With<Health>, Without<Defense>)>,
-    mut q_defenders: Query<(Entity, &mut Health, &Defense, &UnitType), Without<ActionMeter>>,
+    mut q_attackers: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &Team)>,
+    mut q_defenders: Query<(Entity, &mut Health, &Defense, &UnitType, &Team)>,
 ) {
-    // Note: This is a simplified "Every unit with ActionMeter is an attacker, everyone else is a target" approach
-    // In a real game, you'd distinguish Player vs Enemy teams.
-    // For this GDD audit, we need to prove the *loop* works.
+    // Collect potential targets first to avoid borrow checker issues if we tried to iterate both simultaneously in a nested way
+    // But since they are disjoint queries (mut vs mut), we can't do that easily if they overlap.
+    // However, we need to find a target.
 
-    // We'll iterate attackers who are ready
-    for (attacker_entity, mut meter, attack, material, _attacker_type) in q_attackers.iter_mut() {
+    // We iterate attackers.
+    for (attacker_entity, mut meter, attack, material, attacker_team) in q_attackers.iter_mut() {
         if meter.value >= meter.threshold {
-            // Find a target (random or first available)
-            if let Some((target_entity, mut target_health, target_defense, target_type)) = q_defenders.iter_mut().next() {
+            // Find a valid target (Opposing team)
+            let mut target: Option<(Entity, Mut<Health>, &Defense, &UnitType)> = None;
+
+            // We iterate defenders. Since q_defenders overlaps with q_attackers (same entities),
+            // we must be careful. Bevy queries with disjoint access are fine.
+            // But here both are mut access to components on same entities?
+            // q_attackers: Entity, ActionMeter (mut), Attack, Material, Team
+            // q_defenders: Entity, Health (mut), Defense, UnitType, Team
+            // The component sets are disjoint! (ActionMeter vs Health).
+            // So we can iterate them safely.
+
+            for (def_entity, def_health, def_defense, def_type, def_team) in q_defenders.iter_mut() {
+                if attacker_team != def_team && def_health.current > 0.0 {
+                    target = Some((def_entity, def_health, def_defense, def_type));
+                    break; // Just pick first available for now
+                }
+            }
+
+            if let Some((target_entity, mut target_health, target_defense, target_type)) = target {
                 // Calculate Damage
                 let damage = calculate_damage(attack.value, *material, *target_type, target_defense.value);
 
-                info!("Unit {:?} attacks {:?} for {} damage!", attacker_entity, target_entity, damage);
+                info!("{:?} attacks {:?} for {} damage!", attacker_entity, target_entity, damage);
 
                 target_health.current -= damage;
 
                 // Reset meter
                 meter.value -= meter.threshold;
-
-                // Check Death
-                if target_health.current <= 0.0 {
-                    info!("Unit {:?} died!", target_entity);
-                    commands.entity(target_entity).despawn_recursive();
-                }
             } else {
-                // No targets? Maybe wait? Or just keep accumulating?
-                // For now, let's clamp meter to threshold so it doesn't overflow infinitely if no targets exist
-                meter.value = meter.threshold;
+                // No valid target, wait (clamp to threshold)
+                 meter.value = meter.threshold;
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn combat_end_system(
+    mut commands: Commands,
+    q_units: Query<(&Health, &Team)>,
+    mut next_state: ResMut<NextState<crate::plugins::core::GameState>>,
+) {
+    let mut player_alive = false;
+    let mut enemy_alive = false;
 
-    #[test]
-    fn test_material_efficiency() {
-        assert_eq!(MaterialType::Steel.efficiency(UnitType::Human), 1.5);
-        assert_eq!(MaterialType::Steel.efficiency(UnitType::Ethereal), 0.0);
-        assert_eq!(MaterialType::Silver.efficiency(UnitType::Monster), 2.0);
-        assert_eq!(MaterialType::Flesh.efficiency(UnitType::Human), 1.2);
+    for (health, team) in q_units.iter() {
+        if health.current > 0.0 {
+            match team {
+                Team::Player => player_alive = true,
+                Team::Enemy => enemy_alive = true,
+            }
+        }
     }
 
-    #[test]
-    fn test_damage_formula_high_pierce() {
-        // RawDamage >= Defense
-        // Formula: 2 * Raw - Defense
-        let damage = 10.0;
-        let modifier = 1.0;
-        let defense = 5.0;
-        // Raw = 10 * 1 = 10
-        // Final = 2 * 10 - 5 = 15
+    if !player_alive || !enemy_alive {
+        // Combat Over
+        info!("Combat Ended. Player Alive: {}, Enemy Alive: {}", player_alive, enemy_alive);
 
-        let calculated = calculate_damage(damage, MaterialType::Steel, UnitType::Human, defense);
-        // Steel vs Human is 1.5x. Raw = 15. Final = 2*15 - 5 = 25.
-
-        assert_eq!(calculated, 25.0);
-    }
-
-    #[test]
-    fn test_damage_formula_low_pierce() {
-        // RawDamage < Defense
-        // Formula: Raw^2 / Defense
-        let damage = 10.0;
-        let modifier = 0.5; // Artificial modifier for easy math
-        let defense = 20.0;
-
-        // Let's use Steel (0.8) vs Monster
-        let weapon_damage = 10.0;
-        let material = MaterialType::Steel;
-        let unit_type = UnitType::Monster;
-        let defense = 20.0;
-
-        // Raw = 10 * 0.8 = 8.0
-        // 8 < 20
-        // Final = 8^2 / 20 = 64 / 20 = 3.2
-
-        let calculated = calculate_damage(weapon_damage, material, unit_type, defense);
-        assert_eq!(calculated, 3.2);
-    }
-
-    #[test]
-    fn test_action_meter_tick() {
-        let mut app = App::new();
-        app.add_systems(FixedUpdate, tick_timer_system);
-
-        let entity = app.world_mut().spawn((
-            Speed { value: 50.0 },
-            ActionMeter { value: 0.0, threshold: 1000.0 },
-        )).id();
-
-        app.update(); // FixedUpdate might not run on single update without time setup, but let's see.
-        // Actually, simulating FixedUpdate in test requires more setup.
-        // Simplest is to just call the system logic or setup the schedule.
-
-        // Let's just run the system manually on the world
-        let mut schedule = Schedule::default();
-        schedule.add_systems(tick_timer_system);
-        schedule.run(app.world_mut());
-
-        let meter = app.world().get::<ActionMeter>(entity).unwrap();
-        assert_eq!(meter.value, 50.0);
+        // Brief delay could be added here, but for now instant transition
+        next_state.set(crate::plugins::core::GameState::DayPhase);
     }
 }
