@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use crate::plugins::core::GameState;
+use crate::plugins::inventory::Item;
+use crate::plugins::items::{ItemDefinition, ItemType, MaterialType as ItemMaterialType};
 
 pub struct CombatPlugin;
 
@@ -11,7 +14,10 @@ impl Plugin for CombatPlugin {
             .register_type::<ActionMeter>()
             .register_type::<MaterialType>()
             .register_type::<UnitType>()
-            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain());
+            .add_systems(OnEnter(GameState::NightPhase), (setup_combat_phase, apply_deferred, spawn_combat_ui).chain())
+            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(GameState::NightPhase)))
+            .add_systems(Update, update_combat_ui.run_if(in_state(GameState::NightPhase)))
+            .add_systems(OnExit(GameState::NightPhase), teardown_combat);
     }
 }
 
@@ -74,6 +80,14 @@ pub enum UnitType {
     Ethereal,
 }
 
+#[derive(Component, Reflect, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub enum Team {
+    #[default]
+    Player,
+    Enemy,
+}
+
 impl MaterialType {
     pub fn efficiency(&self, target: UnitType) -> f32 {
         match (self, target) {
@@ -118,24 +132,191 @@ pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
     }
 }
 
+fn calculate_stats_from_inventory(
+    q_items: &Query<&ItemDefinition, With<Item>>,
+) -> (f32, f32, f32) {
+    let mut attack = 5.0; // Base attack
+    let mut defense = 0.0;
+    let mut speed = 100.0;
+
+    for item_def in q_items.iter() {
+        match item_def.item_type {
+            ItemType::Weapon => {
+                match item_def.material {
+                     ItemMaterialType::Steel => attack += 10.0,
+                     ItemMaterialType::Silver => attack += 5.0,
+                     ItemMaterialType::Flesh => attack += 8.0,
+                }
+            },
+            ItemType::Consumable => {
+                // Potions might give health? For now ignore.
+            },
+            _ => {}
+        }
+    }
+    (attack, defense, speed)
+}
+
+fn setup_combat_phase(
+    mut commands: Commands,
+    q_items: Query<&ItemDefinition, With<Item>>,
+) {
+    // Calculate stats from inventory items
+    let (player_attack, player_defense, player_speed) = calculate_stats_from_inventory(&q_items);
+
+    // Spawn Player Unit
+    commands.spawn((
+        Name::new("Player"),
+        Team::Player,
+        UnitType::Human,
+        Health { current: 100.0, max: 100.0 },
+        Attack { value: player_attack },
+        Defense { value: player_defense },
+        Speed { value: player_speed },
+        ActionMeter::default(),
+        MaterialType::Steel,
+        CombatEntity,
+    ));
+
+    // Spawn Enemy Unit
+    commands.spawn((
+        Name::new("Enemy"),
+        Team::Enemy,
+        UnitType::Monster,
+        Health { current: 50.0, max: 50.0 },
+        Attack { value: 5.0 },
+        Defense { value: 0.0 },
+        Speed { value: 80.0 },
+        ActionMeter::default(),
+        MaterialType::Flesh,
+        CombatEntity,
+    ));
+
+    info!("Combat Phase Started: Player vs Enemy");
+}
+
+#[derive(Component)]
+struct CombatUiRoot;
+
+#[derive(Component)]
+struct CombatEntity; // Tag for cleanup
+
+#[derive(Component)]
+struct CombatHealthText(Entity); // Entity it displays health for
+
+fn teardown_combat(
+    mut commands: Commands,
+    q_combat_entities: Query<Entity, Or<(With<CombatEntity>, With<CombatUiRoot>)>>,
+) {
+    for entity in q_combat_entities.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
+fn spawn_combat_ui(
+    mut commands: Commands,
+    q_units: Query<(Entity, &Name, &Team)>,
+) {
+    let mut player_entity = None;
+    let mut enemy_entity = None;
+
+    for (entity, _, team) in q_units.iter() {
+        match team {
+            Team::Player => player_entity = Some(entity),
+            Team::Enemy => enemy_entity = Some(entity),
+        }
+    }
+
+    if let (Some(player), Some(enemy)) = (player_entity, enemy_entity) {
+        commands.spawn((
+            CombatUiRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexEnd,
+                padding: UiRect::all(Val::Px(20.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        )).with_children(|parent| {
+            // Player Panel
+            parent.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+            )).with_children(|p| {
+                p.spawn((
+                    Text::new("PLAYER"),
+                    TextFont { font_size: 20.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+                p.spawn((
+                    Text::new("Health: 100/100"),
+                    TextFont { font_size: 16.0, ..default() },
+                    TextColor(Color::srgb(0.0, 1.0, 0.0)),
+                    CombatHealthText(player),
+                ));
+            });
+
+            // Enemy Panel
+            parent.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::FlexEnd,
+                    ..default()
+                },
+            )).with_children(|p| {
+                p.spawn((
+                    Text::new("ENEMY"),
+                    TextFont { font_size: 20.0, ..default() },
+                    TextColor(Color::WHITE),
+                ));
+                p.spawn((
+                    Text::new("Health: 50/50"),
+                    TextFont { font_size: 16.0, ..default() },
+                    TextColor(Color::srgb(1.0, 0.0, 0.0)),
+                    CombatHealthText(enemy),
+                ));
+            });
+        });
+    }
+}
+
+fn update_combat_ui(
+    mut q_text: Query<(&mut Text, &CombatHealthText)>,
+    q_health: Query<(&Health, &ActionMeter)>,
+) {
+    for (mut text, tracker) in q_text.iter_mut() {
+        if let Ok((health, meter)) = q_health.get(tracker.0) {
+            text.0 = format!("HP: {:.0}/{:.0} | AP: {:.0}", health.current, health.max, meter.value);
+        }
+    }
+}
+
 pub fn combat_turn_system(
     mut commands: Commands,
-    mut q_attackers: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &UnitType), (With<Health>, Without<Defense>)>,
-    mut q_defenders: Query<(Entity, &mut Health, &Defense, &UnitType), Without<ActionMeter>>,
+    mut q_units: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &UnitType, &Team)>,
+    mut q_targets: Query<(Entity, &mut Health, &Defense, &UnitType, &Team)>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
-    // Note: This is a simplified "Every unit with ActionMeter is an attacker, everyone else is a target" approach
-    // In a real game, you'd distinguish Player vs Enemy teams.
-    // For this GDD audit, we need to prove the *loop* works.
+    let mut dead_entities = Vec::new();
 
-    // We'll iterate attackers who are ready
-    for (attacker_entity, mut meter, attack, material, _attacker_type) in q_attackers.iter_mut() {
+    // Iterate all units that can attack
+    for (attacker_entity, mut meter, attack, material, _attacker_type, attacker_team) in q_units.iter_mut() {
         if meter.value >= meter.threshold {
-            // Find a target (random or first available)
-            if let Some((target_entity, mut target_health, target_defense, target_type)) = q_defenders.iter_mut().next() {
+            // Find a target from the opposing team
+            let target = q_targets.iter_mut()
+                .filter(|(e, _, _, _, target_team)| *e != attacker_entity && *target_team != attacker_team)
+                .next();
+
+            if let Some((target_entity, mut target_health, target_defense, target_type, _)) = target {
                 // Calculate Damage
                 let damage = calculate_damage(attack.value, *material, *target_type, target_defense.value);
 
-                info!("Unit {:?} attacks {:?} for {} damage!", attacker_entity, target_entity, damage);
+                info!("{:?} attacks {:?} for {} damage!", attacker_team, target_entity, damage);
 
                 target_health.current -= damage;
 
@@ -145,14 +326,39 @@ pub fn combat_turn_system(
                 // Check Death
                 if target_health.current <= 0.0 {
                     info!("Unit {:?} died!", target_entity);
-                    commands.entity(target_entity).despawn_recursive();
+                    dead_entities.push(target_entity);
+
+                    // If Enemy died, Player wins phase?
+                    // If Player died, Game Over?
+                    // For now, just transition back to Day if Enemy dies, or GameOver if Player dies.
+                    // But we can't check Team of dead entity easily here without another query or looking up component.
+                    // We'll handle state transition in the next frame or cleanup system.
                 }
             } else {
-                // No targets? Maybe wait? Or just keep accumulating?
-                // For now, let's clamp meter to threshold so it doesn't overflow infinitely if no targets exist
+                // No valid targets?
                 meter.value = meter.threshold;
             }
         }
+    }
+
+    // Cleanup dead
+    for entity in dead_entities {
+        // Determine team before despawn? We have the entity ID.
+        // We can re-query or just check if it was player.
+        // For simplicity, let's just query team of dying entity.
+        if let Ok((_, _, _, _, team)) = q_targets.get(entity) {
+             match team {
+                 Team::Player => {
+                     info!("Player died! Game Over.");
+                     next_state.set(GameState::GameOver);
+                 },
+                 Team::Enemy => {
+                     info!("Enemy Defeated! Victory!");
+                     next_state.set(GameState::DayPhase);
+                 }
+             }
+        }
+        commands.entity(entity).despawn_recursive();
     }
 }
 

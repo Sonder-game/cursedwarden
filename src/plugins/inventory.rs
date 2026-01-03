@@ -214,6 +214,9 @@ fn debug_spawn_item_system(
                             left: Val::Px(left),
                             top: Val::Px(top),
                             border: UiRect::all(Val::Px(2.0)),
+                            display: Display::Flex,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
                         BackgroundColor(Color::srgb(0.5, 0.5, 0.8)), // Default color for spawned items
@@ -223,6 +226,16 @@ fn debug_spawn_item_system(
                         size,
                         def.clone(), // Attach the definition
                     ))
+                    .with_children(|parent| {
+                        parent.spawn((
+                            Text::new(def.name.clone()),
+                            TextFont {
+                                font_size: 12.0,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    })
                     .observe(handle_drag_start)
                     .observe(handle_drag)
                     .observe(handle_drag_drop)

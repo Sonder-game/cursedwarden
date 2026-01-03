@@ -1,0 +1,26 @@
+[
+    (
+        id: "steel_sword",
+        name: "Steel Sword",
+        width: 1,
+        height: 2,
+        material: Steel,
+        item_type: Weapon,
+    ),
+    (
+        id: "silver_dagger",
+        name: "Silver Dagger",
+        width: 1,
+        height: 1,
+        material: Silver,
+        item_type: Weapon,
+    ),
+    (
+        id: "health_potion",
+        name: "Health Potion",
+        width: 1,
+        height: 1,
+        material: Flesh,
+        item_type: Consumable,
+    ),
+]

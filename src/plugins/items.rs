@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use serde::Deserialize;
+use std::fs::File;
+use std::io::Read;
 
 #[derive(Resource, Default)]
 pub struct ItemDatabase {
@@ -47,39 +49,24 @@ impl Plugin for ItemsPlugin {
 }
 
 fn load_items(mut item_db: ResMut<ItemDatabase>) {
-    // For now, we mock the database loading.
-    // In a real implementation, this would load from assets/items/*.ron
-
-    let items = vec![
-        ItemDefinition {
-            id: "steel_sword".to_string(),
-            name: "Steel Sword".to_string(),
-            width: 1,
-            height: 2,
-            material: MaterialType::Steel,
-            item_type: ItemType::Weapon,
+    let path = "assets/items.ron";
+    match File::open(path) {
+        Ok(mut file) => {
+            let mut content = String::new();
+            if file.read_to_string(&mut content).is_ok() {
+                match ron::from_str::<Vec<ItemDefinition>>(&content) {
+                    Ok(items) => {
+                        for item in items {
+                            item_db.items.insert(item.id.clone(), item);
+                        }
+                        info!("ItemDatabase loaded with {} items from {}.", item_db.items.len(), path);
+                    },
+                    Err(e) => error!("Failed to parse items.ron: {}", e),
+                }
+            } else {
+                error!("Failed to read items.ron");
+            }
         },
-        ItemDefinition {
-            id: "silver_dagger".to_string(),
-            name: "Silver Dagger".to_string(),
-            width: 1,
-            height: 1,
-            material: MaterialType::Silver,
-            item_type: ItemType::Weapon,
-        },
-        ItemDefinition {
-            id: "health_potion".to_string(),
-            name: "Health Potion".to_string(),
-            width: 1,
-            height: 1,
-            material: MaterialType::Flesh, // Potions are weird in this setting? Or glass/fluid. GDD says flesh replaces steel.
-            item_type: ItemType::Consumable,
-        },
-    ];
-
-    for item in items {
-        item_db.items.insert(item.id.clone(), item);
+        Err(e) => error!("Failed to open items.ron: {}. Make sure assets/items.ron exists.", e),
     }
-
-    info!("ItemDatabase loaded with {} items.", item_db.items.len());
 }
