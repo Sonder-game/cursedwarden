@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use cursed_warden::plugins::inventory::{InventoryPlugin, InventoryGridState, Item, ItemSize, GridPosition};
-use cursed_warden::plugins::combat::{CombatPlugin, Health, Attack, Defense, Speed, ActionMeter, MaterialType, UnitType};
+use cursed_warden::plugins::combat::{CombatPlugin, Health, Attack, Defense, Speed, ActionMeter, MaterialType, UnitType, Team};
 use cursed_warden::plugins::metagame::{MetagamePlugin, SaveData, PlayerStats, GlobalTime};
 use cursed_warden::plugins::items::{ItemsPlugin, ItemDefinition};
 use cursed_warden::plugins::core::{CorePlugin, GameState};
@@ -71,6 +71,7 @@ fn test_combat_simulation_loop() {
         ActionMeter { value: 950.0, threshold: 1000.0 },
         MaterialType::Steel,
         UnitType::Human,
+        Team::Player,
     )).id();
 
     // Setup Defender
@@ -78,6 +79,7 @@ fn test_combat_simulation_loop() {
         Health { current: 50.0, max: 50.0 },
         Defense { value: 0.0 },
         UnitType::Monster,
+        Team::Enemy,
     )).id();
 
     // Run updates
@@ -126,7 +128,10 @@ fn test_save_data_creation() {
             name: "Test".to_string(),
             width: 1, height: 1,
             material: cursed_warden::plugins::items::MaterialType::Steel,
-            item_type: cursed_warden::plugins::items::ItemType::Weapon
+            item_type: cursed_warden::plugins::items::ItemType::Weapon,
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
         }
     ));
 
