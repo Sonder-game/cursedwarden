@@ -1,0 +1,20 @@
+[package]
+name = "cursed_warden"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.15", features = ["dynamic_linking"] }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = true
+codegen-units = 1
