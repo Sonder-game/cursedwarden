@@ -9,7 +9,7 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui,))
+           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, consume_pending_items))
            .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
@@ -176,6 +176,83 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                 // Initial items are now spawned via systems or debug tools
             });
         });
+}
+
+fn consume_pending_items(
+    mut commands: Commands,
+    mut pending_items: ResMut<crate::plugins::metagame::PendingItems>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    if let Ok(container) = q_container.get_single() {
+        for item_key in pending_items.0.drain(..) {
+             if let Some(def) = item_db.items.get(&item_key) {
+                 let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+
+                 // Find free spot
+                 if let Some(pos) = grid_state.find_free_spot(size) {
+                     // Calculate UI position
+                     let left = 10.0 + pos.x as f32 * 52.0;
+                     let top = 10.0 + pos.y as f32 * 52.0;
+                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+
+                     let item_entity = commands.spawn((
+                        Node {
+                            width: Val::Px(width),
+                            height: Val::Px(height),
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(left),
+                            top: Val::Px(top),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
+                        BorderColor(Color::WHITE),
+                        Item,
+                        GridPosition { x: pos.x, y: pos.y },
+                        size,
+                        def.clone(),
+                    ))
+                    .with_children(|parent| {
+                         parent.spawn((
+                             Text::new(&def.name),
+                             TextFont {
+                                 font_size: 14.0,
+                                 ..default()
+                             },
+                             TextColor(Color::WHITE),
+                             Node {
+                                 position_type: PositionType::Absolute,
+                                 left: Val::Px(2.0),
+                                 top: Val::Px(2.0),
+                                 ..default()
+                             },
+                         ));
+                    })
+                    .observe(handle_drag_start)
+                    .observe(handle_drag)
+                    .observe(handle_drag_drop)
+                    .id();
+
+                    // Add to grid state
+                    for dy in 0..size.height {
+                        for dx in 0..size.width {
+                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
+                        }
+                    }
+
+                    commands.entity(container).add_child(item_entity);
+                    info!("Consumed pending item {} at {:?}", def.name, pos);
+                 } else {
+                     warn!("No space for pending item {}", def.name);
+                 }
+            } else {
+                warn!("Unknown item id: {}", item_key);
+            }
+        }
+    }
 }
 
 fn debug_spawn_item_system(

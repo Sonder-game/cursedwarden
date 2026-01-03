@@ -11,6 +11,7 @@ impl Plugin for CombatPlugin {
             .register_type::<ActionMeter>()
             .register_type::<MaterialType>()
             .register_type::<UnitType>()
+            .register_type::<Team>()
             .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
             .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
             .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
@@ -23,6 +24,13 @@ pub struct CombatLog;
 
 #[derive(Component)]
 pub struct CombatUnitUi;
+
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub enum Team {
+    Player,
+    Enemy,
+}
 
 // Systems
 fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<CombatUnitUi>>) {
@@ -76,6 +84,7 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
             ActionMeter::default(),
             UnitType::Human,
             MaterialType::Steel,
+            Team::Player,
         ));
 
         // VS Text
@@ -115,6 +124,7 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
             ActionMeter::default(),
             UnitType::Monster,
             MaterialType::Flesh,
+            Team::Enemy,
         ));
     });
 }
@@ -248,39 +258,75 @@ pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
 
 pub fn combat_turn_system(
     mut commands: Commands,
-    mut q_attackers: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &UnitType), (With<Health>, Without<Defense>)>,
-    mut q_defenders: Query<(Entity, &mut Health, &Defense, &UnitType), Without<ActionMeter>>,
+    mut q_units: Query<(Entity, &mut ActionMeter, &Attack, &Defense, &mut Health, &Team, &MaterialType, &UnitType)>,
+    mut next_state: ResMut<NextState<crate::plugins::core::GameState>>,
 ) {
-    // Note: This is a simplified "Every unit with ActionMeter is an attacker, everyone else is a target" approach
-    // In a real game, you'd distinguish Player vs Enemy teams.
-    // For this GDD audit, we need to prove the *loop* works.
-
-    // We'll iterate attackers who are ready
-    for (attacker_entity, mut meter, attack, material, _attacker_type) in q_attackers.iter_mut() {
+    // Collect all potential targets first to avoid borrow checker issues with double iteration
+    let mut ready_units = Vec::new();
+    for (entity, meter, _, _, _, team, _, _) in q_units.iter() {
         if meter.value >= meter.threshold {
-            // Find a target (random or first available)
-            if let Some((target_entity, mut target_health, target_defense, target_type)) = q_defenders.iter_mut().next() {
-                // Calculate Damage
-                let damage = calculate_damage(attack.value, *material, *target_type, target_defense.value);
+            ready_units.push((entity, *team));
+        }
+    }
 
-                info!("Unit {:?} attacks {:?} for {} damage!", attacker_entity, target_entity, damage);
-
-                target_health.current -= damage;
-
-                // Reset meter
-                meter.value -= meter.threshold;
-
-                // Check Death
-                if target_health.current <= 0.0 {
-                    info!("Unit {:?} died!", target_entity);
-                    commands.entity(target_entity).despawn_recursive();
-                }
+    for (attacker_entity, attacker_team) in ready_units {
+        let (attacker_damage, attacker_material) =
+            if let Ok((_, mut meter, attack, _, _, _, material, _)) = q_units.get_mut(attacker_entity) {
+                 if meter.value < meter.threshold { continue; }
+                 meter.value -= meter.threshold;
+                 (attack.value, *material)
             } else {
-                // No targets? Maybe wait? Or just keep accumulating?
-                // For now, let's clamp meter to threshold so it doesn't overflow infinitely if no targets exist
-                meter.value = meter.threshold;
+                continue;
+            };
+
+        // Find target
+        let mut target_entity_opt = None;
+        let mut target_defense_val = 0.0;
+        let mut target_unit_type_val = UnitType::Human;
+
+        for (candidate_entity, _, _, defense, health, team, _, unit_type) in q_units.iter() {
+            if *team != attacker_team && health.current > 0.0 {
+                target_entity_opt = Some(candidate_entity);
+                target_defense_val = defense.value;
+                target_unit_type_val = *unit_type;
+                break;
             }
         }
+
+        if let Some(target_entity) = target_entity_opt {
+             let damage = calculate_damage(attacker_damage, attacker_material, target_unit_type_val, target_defense_val);
+
+             info!("Unit {:?} ({:?}) attacks {:?} for {:.1} damage!", attacker_entity, attacker_team, target_entity, damage);
+
+             if let Ok((_, _, _, _, mut health, _, _, _)) = q_units.get_mut(target_entity) {
+                 health.current -= damage;
+                 if health.current <= 0.0 {
+                     info!("Unit {:?} died!", target_entity);
+                     commands.entity(target_entity).despawn_recursive();
+                 }
+             }
+        }
+    }
+
+    // Check game over / victory conditions
+    let mut player_alive = false;
+    let mut enemy_alive = false;
+
+    for (_, _, _, _, health, team, _, _) in q_units.iter() {
+        if health.current > 0.0 {
+            match team {
+                Team::Player => player_alive = true,
+                Team::Enemy => enemy_alive = true,
+            }
+        }
+    }
+
+    if !player_alive {
+        info!("Player Defeated! Returning to City...");
+        next_state.set(crate::plugins::core::GameState::DayPhase);
+    } else if !enemy_alive {
+        info!("Victory! Returning to City...");
+        next_state.set(crate::plugins::core::GameState::DayPhase);
     }
 }
 

@@ -93,16 +93,47 @@ fn spawn_hud(mut commands: Commands) {
                 },
                 TextColor(Color::srgb(0.8, 0.8, 0.8)),
             ));
+
+             // Start Combat Button (Visible in Evening Only - Logic below needs to handle visibility, or we spawn it dynamically elsewhere.
+             // For simplicity, let's spawn it here but toggle visibility in update_hud, or just add a button that is always there but only works in Evening?
+             // Better: Add a distinct UI element for the button.)
+             bottom_bar.spawn((
+                 Button,
+                 Node {
+                     width: Val::Px(120.0),
+                     height: Val::Px(24.0),
+                     margin: UiRect::left(Val::Px(20.0)),
+                     justify_content: JustifyContent::Center,
+                     align_items: AlignItems::Center,
+                     ..default()
+                 },
+                 BackgroundColor(Color::srgb(0.6, 0.1, 0.1)),
+                 StartCombatButton,
+             ))
+             .with_children(|btn| {
+                 btn.spawn((
+                     Text::new("Start Combat"),
+                     TextFont { font_size: 14.0, ..default() },
+                     TextColor(Color::WHITE),
+                 ));
+             });
         });
     });
 }
 
+#[derive(Component)]
+struct StartCombatButton;
+
 fn update_hud(
+    mut commands: Commands,
     state: Res<State<GameState>>,
     player_stats: Res<PlayerStats>,
     time: Res<GlobalTime>,
     mut q_phase: Query<&mut Text, (With<PhaseText>, Without<StatsText>)>,
     mut q_stats: Query<&mut Text, (With<StatsText>, Without<PhaseText>)>,
+    mut q_combat_btn: Query<&mut Visibility, With<StartCombatButton>>,
+    q_interaction: Query<&Interaction, (Changed<Interaction>, With<StartCombatButton>)>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
     // Update Phase Text
     for mut text in q_phase.iter_mut() {
@@ -125,5 +156,20 @@ fn update_hud(
             "Thalers: {} | Rep: {} | Inf: {}",
             player_stats.thalers, player_stats.reputation, player_stats.infection
         );
+    }
+
+    // Handle Combat Button Visibility & Click
+    let show_button = *state.get() == GameState::EveningPhase;
+    for mut vis in q_combat_btn.iter_mut() {
+        *vis = if show_button { Visibility::Visible } else { Visibility::Hidden };
+    }
+
+    if show_button {
+        for interaction in q_interaction.iter() {
+            if *interaction == Interaction::Pressed {
+                info!("Starting Combat!");
+                next_state.set(GameState::NightPhase);
+            }
+        }
     }
 }

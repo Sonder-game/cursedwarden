@@ -11,8 +11,8 @@ impl Plugin for CorePlugin {
 }
 
 fn finish_loading(mut next_state: ResMut<NextState<GameState>>) {
-    info!("Assets loaded (mock). Transitioning to EveningPhase.");
-    next_state.set(GameState::EveningPhase);
+    info!("Assets loaded (mock). Transitioning to DayPhase.");
+    next_state.set(GameState::DayPhase);
 }
 
 #[derive(States, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
