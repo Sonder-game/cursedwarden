@@ -244,7 +244,7 @@ fn debug_spawn_item_system(
 }
 
 // Drag Handlers
-fn handle_drag_start(
+pub fn handle_drag_start(
     trigger: Trigger<Pointer<DragStart>>,
     mut commands: Commands,
     mut q_node: Query<(&mut ZIndex, &Node)>,
@@ -263,7 +263,7 @@ fn handle_drag_start(
     }
 }
 
-fn handle_drag(
+pub fn handle_drag(
     trigger: Trigger<Pointer<Drag>>,
     mut q_node: Query<&mut Node>,
 ) {
@@ -280,7 +280,7 @@ fn handle_drag(
     }
 }
 
-fn handle_drag_drop(
+pub fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
     mut q_item: Query<(&mut ZIndex, &mut Node, &ItemSize, &mut GridPosition), With<Item>>,
