@@ -135,7 +135,6 @@ mod tests {
         // RawDamage >= Defense
         // Formula: 2 * Raw - Defense
         let damage = 10.0;
-        let modifier = 1.0;
         let defense = 5.0;
         // Raw = 10 * 1 = 10
         // Final = 2 * 10 - 5 = 15
@@ -150,9 +149,6 @@ mod tests {
     fn test_damage_formula_low_pierce() {
         // RawDamage < Defense
         // Formula: Raw^2 / Defense
-        let damage = 10.0;
-        let modifier = 0.5; // Artificial modifier for easy math
-        let defense = 20.0;
 
         // Let's use Steel (0.8) vs Monster
         let weapon_damage = 10.0;
