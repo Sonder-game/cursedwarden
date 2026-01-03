@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 mod plugins;
+use plugins::combat::CombatPlugin;
 use plugins::core::CorePlugin;
 use plugins::inventory::InventoryPlugin;
 use plugins::items::ItemsPlugin;
@@ -11,6 +12,7 @@ fn main() {
         .add_plugins(CorePlugin)
         .add_plugins(InventoryPlugin)
         .add_plugins(ItemsPlugin)
+        .add_plugins(CombatPlugin)
         .add_systems(Startup, setup)
         .run();
 }
