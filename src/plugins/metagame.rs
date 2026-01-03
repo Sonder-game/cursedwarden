@@ -1,7 +1,6 @@
 use bevy::prelude::*;
-use bevy::utils::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::plugins::items::{ItemDefinition, MaterialType, ItemType};
+use crate::plugins::items::ItemDefinition;
 
 // Re-export or redefine necessary types for serialization if they aren't in shared modules
 // Since ItemDefinition is in items.rs, we import it.
@@ -55,7 +54,7 @@ impl Default for GlobalTime {
 
 // Plugin
 use crate::plugins::core::{GameState, DaySubState};
-use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemSize, InventoryGridContainer, DragOriginalPosition, ItemSpawnedEvent};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemSize, InventoryGridContainer, ItemSpawnedEvent};
 use crate::plugins::items::ItemDatabase;
 use std::fs::File;
 use std::io::{Write, Read};

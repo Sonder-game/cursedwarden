@@ -13,11 +13,14 @@ impl Plugin for CorePlugin {
 pub enum GameState {
    #[default]
    AssetLoading,
+   #[allow(dead_code)]
    MainMenu,
    DayPhase,
    EveningPhase,          // Inventory management
    NightPhase,            // Auto-battle
+   #[allow(dead_code)]
    EventResolution,       // Dialogs
+   #[allow(dead_code)]
    GameOver,
 }
 
@@ -26,6 +29,8 @@ pub enum GameState {
 pub enum DaySubState {
    #[default]
    Idle,
+   #[allow(dead_code)]
    Trading,
+   #[allow(dead_code)]
    MapTravel,
 }

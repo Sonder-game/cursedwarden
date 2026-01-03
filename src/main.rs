@@ -1,11 +1,10 @@
 use bevy::prelude::*;
 
-mod plugins;
-use plugins::combat::CombatPlugin;
-use plugins::core::CorePlugin;
-use plugins::inventory::InventoryPlugin;
-use plugins::items::ItemsPlugin;
-use plugins::metagame::MetagamePlugin;
+use cursed_warden::plugins::combat::CombatPlugin;
+use cursed_warden::plugins::core::CorePlugin;
+use cursed_warden::plugins::inventory::InventoryPlugin;
+use cursed_warden::plugins::items::ItemsPlugin;
+use cursed_warden::plugins::metagame::MetagamePlugin;
 
 fn main() {
     App::new()
