@@ -1,0 +1,22 @@
+(
+    items: [
+        (
+            name: "Rusty Sword",
+            width: 1,
+            height: 2,
+            material: Steel,
+        ),
+        (
+            name: "Silver Dagger",
+            width: 1,
+            height: 1,
+            material: Silver,
+        ),
+        (
+            name: "Wooden Shield",
+            width: 2,
+            height: 2,
+            material: Steel,
+        ),
+    ]
+)
