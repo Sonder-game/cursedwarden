@@ -223,6 +223,22 @@ fn debug_spawn_item_system(
                         size,
                         def.clone(), // Attach the definition
                     ))
+                    .with_children(|parent| {
+                         parent.spawn((
+                             Text::new(&def.name),
+                             TextFont {
+                                 font_size: 14.0,
+                                 ..default()
+                             },
+                             TextColor(Color::WHITE),
+                             Node {
+                                 position_type: PositionType::Absolute,
+                                 left: Val::Px(2.0),
+                                 top: Val::Px(2.0),
+                                 ..default()
+                             },
+                         ));
+                    })
                     .observe(handle_drag_start)
                     .observe(handle_drag)
                     .observe(handle_drag_drop)
