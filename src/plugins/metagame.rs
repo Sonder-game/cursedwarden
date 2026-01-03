@@ -206,6 +206,22 @@ fn load_system_debug(
                                         size,
                                         def.clone(),
                                     ))
+                                    .with_children(|parent| {
+                                         parent.spawn((
+                                             Text::new(&def.name),
+                                             TextFont {
+                                                 font_size: 14.0,
+                                                 ..default()
+                                             },
+                                             TextColor(Color::WHITE),
+                                             Node {
+                                                 position_type: PositionType::Absolute,
+                                                 left: Val::Px(2.0),
+                                                 top: Val::Px(2.0),
+                                                 ..default()
+                                             },
+                                         ));
+                                    })
                                     .id();
 
                                     // Trigger event to attach drag observers

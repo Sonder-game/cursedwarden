@@ -11,7 +11,135 @@ impl Plugin for CombatPlugin {
             .register_type::<ActionMeter>()
             .register_type::<MaterialType>()
             .register_type::<UnitType>()
-            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain());
+            .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
+            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
+            .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
+    }
+}
+
+// Marker Components for Combat UI
+#[derive(Component)]
+pub struct CombatLog;
+
+#[derive(Component)]
+pub struct CombatUnitUi;
+
+// Systems
+fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<CombatUnitUi>>) {
+    // Clean up if re-entering (though ideally we track persistence)
+    for e in q_existing.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+
+    // Spawn Arena UI Container
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            justify_content: JustifyContent::SpaceEvenly,
+            align_items: AlignItems::Center,
+            flex_direction: FlexDirection::Row,
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.05, 0.0, 0.1)),
+        CombatUnitUi, // Tag to cleanup later
+    ))
+    .with_children(|parent| {
+        // Player Side
+        parent.spawn((
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(300.0),
+                border: UiRect::all(Val::Px(2.0)),
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BorderColor(Color::srgb(0.0, 0.0, 1.0)),
+            BackgroundColor(Color::srgb(0.2, 0.2, 0.5)),
+        ))
+        .with_children(|p| {
+             p.spawn((
+                Text::new("Player Unit\nHuman\nHP: 100/100"),
+                TextFont { font_size: 16.0, ..default() },
+                TextColor(Color::WHITE),
+             ));
+        })
+        .insert((
+            Health { current: 100.0, max: 100.0 },
+            Attack { value: 10.0 },
+            Defense { value: 5.0 },
+            Speed { value: 15.0 },
+            ActionMeter::default(),
+            UnitType::Human,
+            MaterialType::Steel,
+        ));
+
+        // VS Text
+        parent.spawn((
+            Text::new("VS"),
+            TextFont { font_size: 40.0, ..default() },
+            TextColor(Color::srgb(1.0, 0.0, 0.0)),
+        ));
+
+        // Enemy Side
+        parent.spawn((
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(300.0),
+                border: UiRect::all(Val::Px(2.0)),
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BorderColor(Color::srgb(1.0, 0.0, 0.0)),
+            BackgroundColor(Color::srgb(0.5, 0.2, 0.2)),
+        ))
+        .with_children(|p| {
+             p.spawn((
+                Text::new("Enemy Monster\nMonster\nHP: 150/150"),
+                TextFont { font_size: 16.0, ..default() },
+                TextColor(Color::WHITE),
+             ));
+        })
+        .insert((
+            Health { current: 150.0, max: 150.0 },
+            Attack { value: 15.0 },
+            Defense { value: 2.0 },
+            Speed { value: 10.0 },
+            ActionMeter::default(),
+            UnitType::Monster,
+            MaterialType::Flesh,
+        ));
+    });
+}
+
+fn update_combat_ui(
+    q_units: Query<(&Health, &UnitType, &ActionMeter, &Children)>,
+    mut q_text: Query<&mut Text>,
+) {
+    for (health, unit_type, meter, children) in q_units.iter() {
+        for &child in children.iter() {
+            if let Ok(mut text) = q_text.get_mut(child) {
+                let type_name = match unit_type {
+                    UnitType::Human => "Human",
+                    UnitType::Monster => "Monster",
+                    UnitType::Ethereal => "Ethereal",
+                };
+                **text = format!(
+                    "{}\nHP: {:.0}/{:.0}\nMeter: {:.0}%",
+                    type_name,
+                    health.current,
+                    health.max,
+                    (meter.value / meter.threshold * 100.0).clamp(0.0, 100.0)
+                );
+            }
+        }
     }
 }
 
