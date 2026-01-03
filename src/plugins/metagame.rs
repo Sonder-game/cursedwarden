@@ -197,6 +197,9 @@ fn load_system_debug(
                                             left: Val::Px(left),
                                             top: Val::Px(top),
                                             border: UiRect::all(Val::Px(2.0)),
+                                            display: Display::Flex,
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
                                             ..default()
                                         },
                                         BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
@@ -206,6 +209,16 @@ fn load_system_debug(
                                         size,
                                         def.clone(),
                                     ))
+                                    .with_children(|parent| {
+                                        parent.spawn((
+                                            Text::new(def.name.clone()),
+                                            TextFont {
+                                                font_size: 12.0,
+                                                ..default()
+                                            },
+                                            TextColor(Color::WHITE),
+                                        ));
+                                    })
                                     .id();
 
                                     // Trigger event to attach drag observers
