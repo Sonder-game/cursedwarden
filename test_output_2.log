@@ -1,0 +1,164 @@
+    Blocking waiting for file lock on build directory
+   Compiling bevy_core_pipeline v0.15.3
+   Compiling alsa-sys v0.3.1
+   Compiling matchers v0.2.0
+   Compiling x11-dl v2.21.0
+   Compiling libudev-sys v0.1.4
+   Compiling euclid v0.22.11
+   Compiling tracing-log v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling serde_json v1.0.148
+   Compiling linux-raw-sys v0.4.15
+   Compiling roxmltree v0.20.0
+   Compiling svg_fmt v0.4.5
+   Compiling rustix v0.38.44
+   Compiling fontconfig-parser v0.5.8
+   Compiling guillotiere v0.6.2
+   Compiling tracing-subscriber v0.3.22
+   Compiling zmij v1.0.8
+   Compiling skrifa v0.22.3
+   Compiling rayon-core v1.13.0
+   Compiling polling v3.11.0
+   Compiling gethostname v1.1.0
+   Compiling bevy_picking v0.15.3
+   Compiling dlib v0.5.2
+   Compiling winit v0.30.12
+   Compiling inotify-sys v0.1.5
+   Compiling memmap2 v0.9.9
+   Compiling cpal v0.15.3
+   Compiling unicode-ccc v0.2.0
+   Compiling rectangle-pack v0.4.2
+   Compiling unicode-properties v0.1.4
+   Compiling unicode-script v0.5.8
+   Compiling itoa v1.0.17
+   Compiling zeno v0.2.3
+   Compiling x11rb-protocol v0.13.2
+   Compiling inflections v1.1.1
+   Compiling percent-encoding v2.3.2
+   Compiling as-raw-xcb-connection v1.0.1
+   Compiling ttf-parser v0.20.0
+   Compiling xkeysym v0.2.1
+   Compiling yazi v0.1.6
+   Compiling unicode-bidi-mirroring v0.2.0
+   Compiling ttf-parser v0.21.1
+   Compiling rustybuzz v0.14.1
+   Compiling swash v0.1.19
+   Compiling xkbcommon-dl v0.4.2
+   Compiling x11rb v0.13.2
+   Compiling fontdb v0.16.2
+   Compiling gltf-derive v1.4.1
+   Compiling bevy_sprite v0.15.3
+   Compiling inotify v0.11.0
+   Compiling calloop v0.13.0
+   Compiling rayon v1.11.0
+   Compiling bevy_log v0.15.3
+   Compiling alsa v0.9.1
+   Compiling ogg v0.8.0
+   Compiling dasp_sample v0.11.0
+   Compiling self_cell v1.2.2
+   Compiling unicode-segmentation v1.12.0
+   Compiling sys-locale v0.3.2
+   Compiling cursor-icon v1.2.0
+   Compiling dpi v0.1.2
+   Compiling unicode-linebreak v0.1.5
+   Compiling unicode-bidi v0.3.18
+   Compiling rangemap v1.7.1
+   Compiling vec_map v0.8.2
+   Compiling gilrs v0.11.0
+   Compiling gilrs-core v0.6.6
+   Compiling cosmic-text v0.12.1
+   Compiling lewton v0.10.2
+   Compiling gltf-json v1.4.1
+   Compiling bevy_pbr v0.15.3
+   Compiling fnv v1.0.7
+   Compiling grid v0.14.0
+   Compiling taffy v0.5.2
+   Compiling gltf v1.4.1
+   Compiling rodio v0.19.0
+   Compiling accesskit_winit v0.23.1
+   Compiling bevy_text v0.15.3
+   Compiling bevy_animation v0.15.3
+   Compiling bevy_scene v0.15.3
+   Compiling approx v0.5.1
+   Compiling bevy_gizmos_macros v0.15.3
+   Compiling bevy_state_macros v0.15.3
+   Compiling base64 v0.22.1
+   Compiling bevy_gltf v0.15.3
+   Compiling bevy_state v0.15.3
+   Compiling bevy_gizmos v0.15.3
+   Compiling bevy_winit v0.15.3
+   Compiling bevy_ui v0.15.3
+   Compiling bevy_audio v0.15.3
+   Compiling bevy_gilrs v0.15.3
+   Compiling bevy_internal v0.15.3
+   Compiling ron v0.12.0
+   Compiling bevy_dylib v0.15.3
+   Compiling bevy v0.15.3
+   Compiling cursed_warden v0.1.0 (/app)
+warning: unused variable: `modifier`
+   --> src/plugins/combat.rs:176:13
+    |
+176 |         let modifier = 1.0;
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_modifier`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `damage`
+   --> src/plugins/combat.rs:191:13
+    |
+191 |         let damage = 10.0;
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_damage`
+
+warning: unused variable: `modifier`
+   --> src/plugins/combat.rs:192:13
+    |
+192 |         let modifier = 0.5; // Artificial modifier for easy math
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_modifier`
+
+warning: unused variable: `defense`
+   --> src/plugins/combat.rs:193:13
+    |
+193 |         let defense = 20.0;
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_defense`
+
+warning: `cursed_warden` (lib test) generated 4 warnings
+warning: unused import: `GameState`
+ --> tests/verification.rs:6:48
+  |
+6 | use cursed_warden::plugins::core::{CorePlugin, GameState};
+  |                                                ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `cursed_warden` (test "verification") generated 1 warning (run `cargo fix --test "verification"` to apply 1 suggestion)
+    Finished `test` profile [optimized + debuginfo] target(s) in 8m 01s
+     Running unittests src/lib.rs (target/debug/deps/cursed_warden-463f01092bf9613f)
+
+running 4 tests
+test plugins::combat::tests::test_damage_formula_low_pierce ... ok
+test plugins::combat::tests::test_material_efficiency ... ok
+test plugins::combat::tests::test_damage_formula_high_pierce ... ok
+test plugins::combat::tests::test_action_meter_tick ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/cursed_warden-e3ca9b9058ada26a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/verification.rs (target/debug/deps/verification-d23b74b18b6e387f)
+
+running 3 tests
+test test_inventory_placement_logic ... ok
+test test_save_data_creation ... ok
+test test_combat_simulation_loop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cursed_warden
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
