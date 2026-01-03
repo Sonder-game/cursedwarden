@@ -4,6 +4,7 @@ mod plugins;
 use plugins::core::CorePlugin;
 use plugins::inventory::InventoryPlugin;
 use plugins::items::ItemsPlugin;
+use plugins::combat::CombatPlugin;
 
 fn main() {
     App::new()
@@ -11,6 +12,7 @@ fn main() {
         .add_plugins(CorePlugin)
         .add_plugins(InventoryPlugin)
         .add_plugins(ItemsPlugin)
+        .add_plugins(CombatPlugin)
         .add_systems(Startup, setup)
         .run();
 }
