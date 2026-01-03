@@ -75,6 +75,7 @@ pub enum UnitType {
 }
 
 impl MaterialType {
+    #[allow(dead_code)]
     pub fn efficiency(&self, target: UnitType) -> f32 {
         match (self, target) {
             (MaterialType::Steel, UnitType::Human) => 1.5,
@@ -92,6 +93,7 @@ impl MaterialType {
     }
 }
 
+#[allow(dead_code)]
 pub fn calculate_damage(
     weapon_damage: f32,
     material: MaterialType,
