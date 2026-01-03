@@ -11,7 +11,7 @@ impl Plugin for CombatPlugin {
             .register_type::<ActionMeter>()
             .register_type::<MaterialType>()
             .register_type::<UnitType>()
-            .add_systems(FixedUpdate, tick_timer_system);
+            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain());
     }
 }
 
@@ -112,9 +112,47 @@ pub fn calculate_damage(
     }
 }
 
-fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
+pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
     for (speed, mut meter) in query.iter_mut() {
         meter.value += speed.value;
+    }
+}
+
+pub fn combat_turn_system(
+    mut commands: Commands,
+    mut q_attackers: Query<(Entity, &mut ActionMeter, &Attack, &MaterialType, &UnitType), (With<Health>, Without<Defense>)>,
+    mut q_defenders: Query<(Entity, &mut Health, &Defense, &UnitType), Without<ActionMeter>>,
+) {
+    // Note: This is a simplified "Every unit with ActionMeter is an attacker, everyone else is a target" approach
+    // In a real game, you'd distinguish Player vs Enemy teams.
+    // For this GDD audit, we need to prove the *loop* works.
+
+    // We'll iterate attackers who are ready
+    for (attacker_entity, mut meter, attack, material, _attacker_type) in q_attackers.iter_mut() {
+        if meter.value >= meter.threshold {
+            // Find a target (random or first available)
+            if let Some((target_entity, mut target_health, target_defense, target_type)) = q_defenders.iter_mut().next() {
+                // Calculate Damage
+                let damage = calculate_damage(attack.value, *material, *target_type, target_defense.value);
+
+                info!("Unit {:?} attacks {:?} for {} damage!", attacker_entity, target_entity, damage);
+
+                target_health.current -= damage;
+
+                // Reset meter
+                meter.value -= meter.threshold;
+
+                // Check Death
+                if target_health.current <= 0.0 {
+                    info!("Unit {:?} died!", target_entity);
+                    commands.entity(target_entity).despawn_recursive();
+                }
+            } else {
+                // No targets? Maybe wait? Or just keep accumulating?
+                // For now, let's clamp meter to threshold so it doesn't overflow infinitely if no targets exist
+                meter.value = meter.threshold;
+            }
+        }
     }
 }
 
