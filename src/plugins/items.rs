@@ -21,6 +21,12 @@ pub struct ItemDefinition {
     pub item_type: ItemType,
 
     #[serde(default)]
+    pub rarity: ItemRarity,
+
+    #[serde(default)]
+    pub price: u32,
+
+    #[serde(default)]
     pub tags: Vec<ItemTag>,
 
     #[serde(default)]
@@ -33,6 +39,22 @@ pub struct ItemDefinition {
     pub defense: f32,
     #[serde(default)]
     pub speed: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash, PartialOrd, Ord)]
+pub enum ItemRarity {
+    Common,
+    Rare,
+    Epic,
+    Legendary,
+    Godly,
+    Unique,
+}
+
+impl Default for ItemRarity {
+    fn default() -> Self {
+        Self::Common
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Hash)]
@@ -116,6 +138,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![], // Will be populated below
             material: MaterialType::Steel,
             item_type: ItemType::Weapon,
+            rarity: ItemRarity::Common,
+            price: 5,
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 10.0,
@@ -130,6 +154,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![],
             material: MaterialType::Silver,
             item_type: ItemType::Weapon,
+            rarity: ItemRarity::Rare,
+            price: 7,
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 8.0,
@@ -144,6 +170,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![],
             material: MaterialType::Flesh,
             item_type: ItemType::Consumable,
+            rarity: ItemRarity::Common,
+            price: 3,
             tags: vec![ItemTag::Potion],
             synergies: vec![],
             attack: 0.0,
@@ -158,6 +186,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![],
             material: MaterialType::Steel,
             item_type: ItemType::Consumable,
+            rarity: ItemRarity::Common,
+            price: 4,
             tags: vec![ItemTag::Valuable],
             synergies: vec![
                 SynergyDefinition {
@@ -184,6 +214,55 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+        },
+        // Adding more items to test rarity
+        ItemDefinition {
+            id: "epic_shield".to_string(),
+            name: "Epic Shield".to_string(),
+            width: 2,
+            height: 2,
+            shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Epic,
+            price: 12,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 2.0,
+            defense: 20.0,
+            speed: -2.0,
+        },
+        ItemDefinition {
+            id: "legendary_bow".to_string(),
+            name: "Legendary Bow".to_string(),
+            width: 1,
+            height: 3,
+            shape: vec![],
+            material: MaterialType::Flesh,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Legendary,
+            price: 25,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 15.0,
+            defense: 0.0,
+            speed: 10.0,
+        },
+        ItemDefinition {
+             id: "unique_charm".to_string(),
+             name: "Unique Charm".to_string(),
+             width: 1,
+             height: 1,
+             shape: vec![],
+             material: MaterialType::Silver,
+             item_type: ItemType::Consumable,
+             rarity: ItemRarity::Unique,
+             price: 50,
+             tags: vec![ItemTag::Valuable],
+             synergies: vec![],
+             attack: 0.0,
+             defense: 0.0,
+             speed: 0.0,
         },
     ];
 

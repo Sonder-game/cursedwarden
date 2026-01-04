@@ -6,6 +6,7 @@ use cursed_warden::plugins::inventory::InventoryPlugin;
 use cursed_warden::plugins::items::ItemsPlugin;
 use cursed_warden::plugins::metagame::MetagamePlugin;
 use cursed_warden::plugins::ui::UiPlugin;
+use cursed_warden::plugins::shop::ShopPlugin;
 
 fn main() {
     App::new()
@@ -16,6 +17,7 @@ fn main() {
         .add_plugins(CombatPlugin)
         .add_plugins(MetagamePlugin)
         .add_plugins(UiPlugin)
+        .add_plugins(ShopPlugin)
         .add_systems(Startup, setup)
         .run();
 }
