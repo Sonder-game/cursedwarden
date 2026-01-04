@@ -7,6 +7,7 @@ use cursed_warden::plugins::items::ItemsPlugin;
 use cursed_warden::plugins::metagame::MetagamePlugin;
 use cursed_warden::plugins::ui::UiPlugin;
 use cursed_warden::plugins::shop::ShopPlugin;
+use cursed_warden::plugins::visualization::VisualizationPlugin;
 
 fn main() {
     App::new()
@@ -18,6 +19,7 @@ fn main() {
         .add_plugins(MetagamePlugin)
         .add_plugins(UiPlugin)
         .add_plugins(ShopPlugin)
+        .add_plugins(VisualizationPlugin)
         .add_systems(Startup, setup)
         .run();
 }
