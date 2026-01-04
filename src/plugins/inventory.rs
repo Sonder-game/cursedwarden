@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use bevy::utils::{HashMap, HashSet};
 use crate::plugins::core::GameState;
-use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType};
+use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType, RecipeDefinition, RecipeIngredient};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
 
@@ -10,9 +10,20 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
+           .init_resource::<ActiveRecipes>()
+           // Note: check_recipes_system runs after transformations to ensure positions are up to date
+           .add_systems(OnEnter(GameState::EveningPhase),
+               (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, craft_items_system, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (
+               resize_item_system,
+               debug_spawn_item_system,
+               rotate_item_input_system,
+               synergy_system,
+               visualize_synergy_system,
+               check_recipes_system,
+               visualize_recipes_system
+           ).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -82,6 +93,18 @@ pub struct InventoryGridState {
    pub grid: HashMap<IVec2, Cell>,
    pub width: i32,
    pub height: i32,
+}
+
+#[derive(Resource, Default)]
+pub struct ActiveRecipes {
+    pub matches: Vec<CraftingMatch>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CraftingMatch {
+    pub recipe_index: usize,
+    pub ingredients: Vec<Entity>,
+    pub result_id: String,
 }
 
 impl Default for InventoryGridState {
@@ -181,6 +204,28 @@ impl InventoryGridState {
         }
         None
     }
+
+    // Search for a spot near a target position (spiral search or distance sort)
+    pub fn find_free_spot_near(&self, def: &ItemDefinition, target: IVec2) -> Option<IVec2> {
+        let mut candidates = Vec::new();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let pos = IVec2::new(x, y);
+                if self.can_place_item(&def.shape, pos, 0, None) {
+                    candidates.push(pos);
+                }
+            }
+        }
+
+        // Sort by distance to target
+        candidates.sort_by_key(|pos| {
+             let dx = pos.x - target.x;
+             let dy = pos.y - target.y;
+             dx*dx + dy*dy
+        });
+
+        candidates.first().cloned()
+    }
 }
 
 pub struct CombatStats {
@@ -201,11 +246,6 @@ pub fn calculate_combat_stats(
         health: 0.0,
     };
 
-    // Note: This logic duplicates synergy calculation a bit because we don't persist ActiveSynergies properly.
-    // In a real implementation, we should run the synergy logic on the persistent data or simulate the grid.
-    // For now, we just sum base stats.
-    // TODO: Implement synergy calculation for combat snapshot
-
     for saved_item in &inventory.items {
         if let Some(def) = item_db.items.get(&saved_item.item_id) {
             stats.attack += def.attack;
@@ -218,7 +258,261 @@ pub fn calculate_combat_stats(
     stats
 }
 
+// --- HELPER FUNCTION FOR RECIPE DETECTION ---
+// Snapshot of item data needed for detection
+struct ItemSnapshot<'a> {
+    entity: Entity,
+    def: &'a ItemDefinition,
+    cells: Vec<IVec2>,
+}
+
+fn find_active_recipes(
+    item_db: &ItemDatabase,
+    items_data: &Vec<(Entity, &ItemDefinition, GridPosition, ItemRotation)>,
+) -> Vec<CraftingMatch> {
+    let mut matches_found = Vec::new();
+
+    // 1. Build snapshots with occupied cells for fast adjacency
+    let snapshots: Vec<ItemSnapshot> = items_data.iter().map(|(entity, def, pos, rot)| {
+         let shape = InventoryGridState::get_rotated_shape(&def.shape, rot.value);
+         let cells: Vec<IVec2> = shape.iter().map(|offset| IVec2::new(pos.x, pos.y) + *offset).collect();
+         ItemSnapshot {
+             entity: *entity,
+             def: *def,
+             cells,
+         }
+    }).collect();
+
+    // 2. Map Entity -> Index for quick lookup if needed, or just iterate snapshots
+    // Helper to check adjacency
+    let are_adjacent = |s1: &ItemSnapshot, s2: &ItemSnapshot| -> bool {
+        for c1 in &s1.cells {
+            for c2 in &s2.cells {
+                if (c1.x - c2.x).abs() + (c1.y - c2.y).abs() == 1 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    let mut used_entities = HashSet::new();
+
+    for (r_idx, recipe) in item_db.recipes.iter().enumerate() {
+        // Collect candidates for each ingredient
+        let mut candidates_per_ingredient: Vec<Vec<usize>> = Vec::new(); // Store indices into `snapshots`
+        let mut possible = true;
+
+        for req in &recipe.ingredients {
+             let mut matches = Vec::new();
+             for (idx, s) in snapshots.iter().enumerate() {
+                 if s.def.id == req.item_id && !used_entities.contains(&s.entity) {
+                     matches.push(idx);
+                 }
+             }
+             if matches.is_empty() { possible = false; break; }
+             candidates_per_ingredient.push(matches);
+        }
+
+        if !possible { continue; }
+
+        // Brute force combinations
+        let mut indices = vec![0; candidates_per_ingredient.len()];
+
+        loop {
+            // Build current combination
+            let mut current_indices = Vec::new();
+            let mut unique_check = HashSet::new();
+            let mut distinct = true;
+
+            for (i, list_idx) in indices.iter().enumerate() {
+                let s_idx = candidates_per_ingredient[i][*list_idx];
+                if !unique_check.insert(s_idx) || used_entities.contains(&snapshots[s_idx].entity) {
+                    distinct = false;
+                    break;
+                }
+                current_indices.push(s_idx);
+            }
+
+            if distinct {
+                // Check connectivity
+                // Map indices to snapshots
+                let current_snapshots: Vec<&ItemSnapshot> = current_indices.iter().map(|&idx| &snapshots[idx]).collect();
+
+                if is_snapshot_connected(&current_snapshots, &are_adjacent) {
+                    // Valid Match!
+                    let ingredients: Vec<Entity> = current_snapshots.iter().map(|s| s.entity).collect();
+                    matches_found.push(CraftingMatch {
+                        recipe_index: r_idx,
+                        ingredients: ingredients.clone(),
+                        result_id: recipe.result_item_id.clone(),
+                    });
+
+                    // Mark used?
+                    // If we want to allow multiple crafts of DIFFERENT recipes, we should mark.
+                    // If we want to allow multiple crafts of SAME recipe, we definitely mark.
+                    // But we are in a loop for ONE recipe.
+                    // If we mark them used, we can continue finding others of same recipe.
+                    for s in current_snapshots {
+                        used_entities.insert(s.entity);
+                    }
+
+                    // We must advance indices carefully if we want to find MORE of the same recipe.
+                    // For simplicity, we just continue loop. The `used_entities` check above will invalidate reused entities.
+                }
+            }
+
+            // Next combination
+            let mut i = 0;
+            while i < indices.len() {
+                indices[i] += 1;
+                if indices[i] < candidates_per_ingredient[i].len() {
+                    break;
+                }
+                indices[i] = 0;
+                i += 1;
+            }
+            if i >= indices.len() {
+                break; // Done all combinations
+            }
+        }
+    }
+
+    matches_found
+}
+
+fn is_snapshot_connected<F>(snapshots: &Vec<&ItemSnapshot>, adj_fn: &F) -> bool
+where F: Fn(&ItemSnapshot, &ItemSnapshot) -> bool
+{
+    if snapshots.is_empty() { return false; }
+    if snapshots.len() == 1 { return true; }
+
+    let mut visited = HashSet::new();
+    let mut stack = vec![0]; // index in snapshots
+    visited.insert(0);
+
+    while let Some(current_idx) = stack.pop() {
+        let current = snapshots[current_idx];
+        for (i, other) in snapshots.iter().enumerate() {
+            if !visited.contains(&i) {
+                if adj_fn(current, other) {
+                    visited.insert(i);
+                    stack.push(i);
+                }
+            }
+        }
+    }
+
+    visited.len() == snapshots.len()
+}
+
 // Systems
+
+fn check_recipes_system(
+    mut active_recipes: ResMut<ActiveRecipes>,
+    item_db: Res<ItemDatabase>,
+    q_items: Query<(Entity, &ItemDefinition, &GridPosition, &ItemRotation)>,
+) {
+    // Collect data
+    let items_data: Vec<_> = q_items.iter().collect();
+    active_recipes.matches = find_active_recipes(&item_db, &items_data);
+}
+
+
+fn visualize_recipes_system(
+    mut gizmos: Gizmos,
+    active_recipes: Res<ActiveRecipes>,
+    q_global_transform: Query<&GlobalTransform>,
+) {
+    for match_data in &active_recipes.matches {
+        // Draw lines between ingredients to show they are linked
+        let entities = &match_data.ingredients;
+        for i in 0..entities.len() {
+             for j in (i+1)..entities.len() {
+                 let e1 = entities[i];
+                 let e2 = entities[j];
+
+                 if let (Ok(t1), Ok(t2)) = (q_global_transform.get(e1), q_global_transform.get(e2)) {
+                      gizmos.line_2d(t1.translation().truncate(), t2.translation().truncate(), Color::srgb(1.0, 0.84, 0.0));
+                 }
+             }
+        }
+    }
+}
+
+fn craft_items_system(
+    mut commands: Commands,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_items: Query<(Entity, &ItemDefinition, &GridPosition, &ItemRotation)>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    // Collect data and run detection
+    let items_data: Vec<_> = q_items.iter().collect();
+    let matches = find_active_recipes(&item_db, &items_data);
+
+    if let Ok(container) = q_container.get_single() {
+        for match_data in matches {
+            let recipe = &item_db.recipes[match_data.recipe_index];
+            info!("Crafting {}!", recipe.result_item_id);
+
+            // 1. Identify Anchor Position (top-leftmost of the ingredients)
+            let mut anchor_pos = IVec2::new(999, 999);
+            for &e in &match_data.ingredients {
+                if let Ok((_, _, pos, _)) = q_items.get(e) {
+                    if pos.y < anchor_pos.y || (pos.y == anchor_pos.y && pos.x < anchor_pos.x) {
+                        anchor_pos = IVec2::new(pos.x, pos.y);
+                    }
+                }
+            }
+
+            // 2. Remove Ingredients (unless catalyst)
+            for (i, &entity) in match_data.ingredients.iter().enumerate() {
+                // Match ingredient index in recipe?
+                // `find_active_recipes` returns ingredients in order found in loops?
+                // No, it returns `current_snapshots`.
+                // The ingredients in `recipe.ingredients` correspond to `candidates_per_ingredient`.
+                // In `find_active_recipes`, `current_indices` corresponds to `candidates_per_ingredient` indices.
+                // So `match_data.ingredients[i]` corresponds to `recipe.ingredients[i]`.
+
+                let is_catalyst = recipe.ingredients[i].is_catalyst;
+                if !is_catalyst {
+                    // Despawn and free grid
+                     if let Ok((_, def, pos, rot)) = q_items.get(entity) {
+                         // Clear grid
+                         let shape = InventoryGridState::get_rotated_shape(&def.shape, rot.value);
+                         for offset in shape {
+                             let p = IVec2::new(pos.x, pos.y) + offset;
+                             if let Some(cell) = grid_state.grid.get_mut(&p) {
+                                 cell.state = CellState::Free;
+                             }
+                         }
+                         commands.entity(entity).despawn_recursive();
+                     }
+                }
+            }
+
+            // 3. Spawn Result
+            if let Some(result_def) = item_db.items.get(&recipe.result_item_id) {
+                // Find valid spot near anchor
+                if let Some(pos) = grid_state.find_free_spot_near(result_def, anchor_pos) {
+                     spawn_item_entity(
+                         &mut commands,
+                         container,
+                         result_def,
+                         pos,
+                         0,
+                         &mut grid_state
+                     );
+                     info!("Spawned crafted item {}", result_def.name);
+                } else {
+                     warn!("Not enough space for crafted item {}", result_def.name);
+                }
+            }
+        }
+    }
+}
+
 fn visualize_synergy_system(
     mut q_items: Query<(&ActiveSynergies, &mut BorderColor), Changed<ActiveSynergies>>,
 ) {
