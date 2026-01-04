@@ -122,7 +122,7 @@ pub enum ItemType {
     Weapon,
     Consumable,
     Ammo,
-    // Add others as needed
+    Bag,
 }
 
 pub struct ItemsPlugin;
@@ -272,6 +272,57 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
              attack: 0.0,
              defense: 0.0,
              speed: 0.0,
+        },
+        // Bags
+        ItemDefinition {
+            id: "starter_bag".to_string(),
+            name: "Starter Bag".to_string(),
+            width: 3,
+            height: 3,
+            shape: vec![],
+            material: MaterialType::Flesh, // Leather
+            item_type: ItemType::Bag,
+            rarity: ItemRarity::Common, // Not in shop typically
+            price: 0,
+            tags: vec![],
+            synergies: vec![],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        },
+        ItemDefinition {
+            id: "leather_bag".to_string(),
+            name: "Leather Bag".to_string(),
+            width: 2,
+            height: 2,
+            shape: vec![],
+            material: MaterialType::Flesh,
+            item_type: ItemType::Bag,
+            rarity: ItemRarity::Common,
+            price: 4,
+            tags: vec![],
+            synergies: vec![],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        },
+        ItemDefinition {
+            id: "fanny_pack".to_string(),
+            name: "Fanny Pack".to_string(),
+            width: 2,
+            height: 1,
+            shape: vec![],
+            material: MaterialType::Flesh,
+            item_type: ItemType::Bag,
+            rarity: ItemRarity::Rare,
+            price: 6,
+            tags: vec![],
+            synergies: vec![
+                 // Example synergy: Speed up items inside? For now placeholder.
+            ],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
         },
     ];
 
