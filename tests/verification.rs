@@ -155,6 +155,8 @@ fn test_save_data_creation() {
             shape: vec![IVec2::new(0,0)],
             material: cursed_warden::plugins::items::MaterialType::Steel,
             item_type: cursed_warden::plugins::items::ItemType::Weapon,
+            rarity: cursed_warden::plugins::items::ItemRarity::Common,
+            price: 10,
             tags: vec![],
             synergies: vec![],
             attack: 10.0,
