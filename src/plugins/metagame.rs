@@ -64,6 +64,12 @@ pub struct MetagamePlugin;
 #[derive(Resource, Default, Debug)]
 pub struct PendingItems(pub Vec<String>);
 
+/// Holds inventory state between Evening phases (e.g. during Combat)
+#[derive(Resource, Default, Debug, Clone)]
+pub struct PersistentInventory {
+    pub items: Vec<SavedItem>,
+}
+
 #[derive(Component)]
 struct CityUiRoot;
 
@@ -75,6 +81,7 @@ impl Plugin for MetagamePlugin {
         app.init_resource::<PlayerStats>()
            .init_resource::<GlobalTime>()
            .init_resource::<PendingItems>()
+           .init_resource::<PersistentInventory>()
            .add_systems(OnEnter(DaySubState::Idle), day_start_logic)
            .add_systems(OnEnter(GameState::DayPhase), spawn_city_ui)
            .add_systems(OnExit(GameState::DayPhase), cleanup_city_ui)
@@ -145,13 +152,10 @@ fn cleanup_city_ui(mut commands: Commands, q_root: Query<Entity, With<CityUiRoot
 }
 
 fn handle_city_buttons(
-    mut commands: Commands,
+    // Removed unused mut commands
     mut q_buttons: Query<(&Interaction, &CityButton, &mut BackgroundColor), (Changed<Interaction>, With<Button>)>,
     mut pending_items: ResMut<PendingItems>,
     mut next_state: ResMut<NextState<GameState>>,
-    // We can also access grid directly if we wanted, but let's stick to PendingItems for simplicity in architecture
-    // actually, let's just cheat and add to PendingItems, and consume them in EveningPhase.
-    // Wait, we need a system in EveningPhase to consume PendingItems.
 ) {
     for (interaction, action, mut bg_color) in q_buttons.iter_mut() {
         match *interaction {

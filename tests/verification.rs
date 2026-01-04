@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use cursed_warden::plugins::inventory::{InventoryPlugin, InventoryGridState, Item, ItemSize, GridPosition};
-use cursed_warden::plugins::combat::{CombatPlugin, Health, Attack, Defense, Speed, ActionMeter, MaterialType, UnitType};
+use cursed_warden::plugins::combat::{CombatPlugin, Health, Attack, Defense, Speed, ActionMeter, MaterialType, UnitType, Team};
 use cursed_warden::plugins::metagame::{MetagamePlugin, SaveData, PlayerStats, GlobalTime};
 use cursed_warden::plugins::items::{ItemsPlugin, ItemDefinition};
-use cursed_warden::plugins::core::{CorePlugin, GameState};
+use cursed_warden::plugins::core::CorePlugin;
 
 // Helper to setup app
 fn setup_app() -> App {
@@ -67,17 +67,24 @@ fn test_combat_simulation_loop() {
     let attacker = app.world_mut().spawn((
         Health { current: 100.0, max: 100.0 },
         Attack { value: 10.0 },
+        Defense { value: 5.0 },
         Speed { value: 100.0 }, // High speed to trigger quickly
         ActionMeter { value: 950.0, threshold: 1000.0 },
         MaterialType::Steel,
         UnitType::Human,
+        Team::Player,
     )).id();
 
     // Setup Defender
     let defender = app.world_mut().spawn((
         Health { current: 50.0, max: 50.0 },
+        Attack { value: 5.0 },
         Defense { value: 0.0 },
+        Speed { value: 10.0 },
+        ActionMeter { value: 0.0, threshold: 1000.0 },
+        MaterialType::Flesh,
         UnitType::Monster,
+        Team::Enemy,
     )).id();
 
     // Run updates
