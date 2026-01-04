@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use bevy::utils::{HashMap, HashSet};
 use crate::plugins::core::GameState;
 use crate::plugins::items::{ItemDatabase, ItemDefinition};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
@@ -12,7 +12,7 @@ impl Plugin for InventoryPlugin {
         app.init_resource::<InventoryGridState>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -58,14 +58,25 @@ pub struct DragOriginalPosition {
 #[derive(Resource)]
 pub struct InventoryGridState {
    pub cells: HashMap<IVec2, Entity>,
+   pub valid_cells: HashSet<IVec2>,
    pub width: i32,
    pub height: i32,
 }
 
 impl Default for InventoryGridState {
     fn default() -> Self {
+        let mut valid_cells = HashSet::new();
+        // Initialize a default "backpack" shape (e.g., 6x4 in the middle)
+        // Center it in the 8x8 grid for now (offsets 1, 2)
+        for y in 2..6 {
+            for x in 1..7 {
+                valid_cells.insert(IVec2::new(x, y));
+            }
+        }
+
         Self {
             cells: HashMap::new(),
+            valid_cells,
             width: 8,
             height: 8,
         }
@@ -74,15 +85,22 @@ impl Default for InventoryGridState {
 
 impl InventoryGridState {
     pub fn is_area_free(&self, pos: IVec2, size: ItemSize, exclude_entity: Option<Entity>) -> bool {
-        // Check bounds
+        // Check bounds (overall grid size)
         if pos.x < 0 || pos.y < 0 || pos.x + size.width > self.width || pos.y + size.height > self.height {
             return false;
         }
 
-        // Check collisions
+        // Check collisions and validity
         for dy in 0..size.height {
             for dx in 0..size.width {
                 let check_pos = IVec2::new(pos.x + dx, pos.y + dy);
+
+                // Check if cell is a valid inventory slot
+                if !self.valid_cells.contains(&check_pos) {
+                    return false;
+                }
+
+                // Check if occupied
                 if let Some(occupier) = self.cells.get(&check_pos) {
                     if Some(*occupier) != exclude_entity {
                         return false;
@@ -159,6 +177,19 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                 // Spawn Slots
                 for y in 0..grid_state.height {
                     for x in 0..grid_state.width {
+                       let is_valid = grid_state.valid_cells.contains(&IVec2::new(x, y));
+                       let bg_color = if is_valid {
+                           Color::srgb(0.3, 0.3, 0.3)
+                       } else {
+                           Color::srgba(0.1, 0.1, 0.1, 0.5) // Darker/Transparent for invalid
+                       };
+
+                       let border_color = if is_valid {
+                            Color::BLACK
+                       } else {
+                            Color::srgba(0.0, 0.0, 0.0, 0.2)
+                       };
+
                        grid_parent.spawn((
                             Node {
                                 width: Val::Px(50.0),
@@ -166,8 +197,8 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                                 border: UiRect::all(Val::Px(1.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.3, 0.3, 0.3)),
-                            BorderColor(Color::BLACK),
+                            BackgroundColor(bg_color),
+                            BorderColor(border_color),
                             InventorySlot { x, y },
                         ));
                     }
@@ -334,6 +365,28 @@ fn spawn_item_entity(
     }
 
     commands.entity(container).add_child(item_entity);
+}
+
+fn rotate_item_input_system(
+    input: Res<ButtonInput<KeyCode>>,
+    mut q_dragged_item: Query<(Entity, &mut ItemSize, &mut Node), With<DragOriginalPosition>>,
+) {
+    if input.just_pressed(KeyCode::KeyR) {
+        for (_entity, mut size, mut node) in q_dragged_item.iter_mut() {
+            // Swap width and height
+            let new_width = size.height;
+            let new_height = size.width;
+            size.width = new_width;
+            size.height = new_height;
+
+            // Update Node size immediately for visual feedback
+            // (resize_item_system handles it too, but this makes it snappy)
+            let width_px = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+            let height_px = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+            node.width = Val::Px(width_px);
+            node.height = Val::Px(height_px);
+        }
+    }
 }
 
 fn debug_spawn_item_system(
