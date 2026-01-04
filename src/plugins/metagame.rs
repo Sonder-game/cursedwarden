@@ -17,7 +17,8 @@ pub struct SavedItem {
     pub item_id: String,
     pub grid_x: i32,
     pub grid_y: i32,
-    // We might want to save dynamic state here later (e.g. current durability, mutations)
+    #[serde(default)]
+    pub rotation: u8,
 }
 
 #[derive(Resource, Debug, Serialize, Deserialize, Clone)]
@@ -214,14 +215,15 @@ fn day_start_logic() {
 pub fn create_save_data(
     player_stats: &PlayerStats,
     global_time: &GlobalTime,
-    q_items: &Query<(&ItemDefinition, &GridPosition), With<Item>>,
+    q_items: &Query<(&ItemDefinition, &GridPosition, &ItemRotation), With<Item>>,
 ) -> SaveData {
     let mut saved_items = Vec::new();
-    for (def, pos) in q_items.iter() {
+    for (def, pos, rot) in q_items.iter() {
         saved_items.push(SavedItem {
             item_id: def.id.clone(),
             grid_x: pos.x,
             grid_y: pos.y,
+            rotation: rot.value,
         });
     }
 
@@ -236,7 +238,7 @@ fn save_system(
     input: Res<ButtonInput<KeyCode>>,
     player_stats: Res<PlayerStats>,
     global_time: Res<GlobalTime>,
-    q_items: Query<(&ItemDefinition, &GridPosition), With<Item>>,
+    q_items: Query<(&ItemDefinition, &GridPosition, &ItemRotation), With<Item>>,
 ) {
     if input.just_pressed(KeyCode::F5) {
         let save_data = create_save_data(&player_stats, &global_time, &q_items);
@@ -291,8 +293,7 @@ fn load_system_debug(
                         if let Ok(container) = q_container.get_single() {
                             for saved_item in data.inventory {
                                 if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                                     // TODO: Save/Load rotation. Assuming 0 for now.
-                                     let rotation = 0;
+                                     let rotation = saved_item.rotation;
                                      let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
 
                                      // Recalculate size from shape

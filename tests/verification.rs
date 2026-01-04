@@ -154,7 +154,12 @@ fn test_save_data_creation() {
             width: 1, height: 1,
             shape: vec![IVec2::new(0,0)],
             material: cursed_warden::plugins::items::MaterialType::Steel,
-            item_type: cursed_warden::plugins::items::ItemType::Weapon
+            item_type: cursed_warden::plugins::items::ItemType::Weapon,
+            tags: vec![],
+            synergies: vec![],
+            attack: 10.0,
+            defense: 0.0,
+            speed: 0.0,
         }
     ));
 
@@ -172,6 +177,7 @@ fn test_save_data_creation() {
             item_id: def.id.clone(),
             grid_x: pos.x,
             grid_y: pos.y,
+            rotation: 0,
         });
     }
 
