@@ -5,6 +5,15 @@ use serde::Deserialize;
 #[derive(Resource, Default)]
 pub struct ItemDatabase {
     pub items: HashMap<String, ItemDefinition>,
+    pub recipes: Vec<RecipeDefinition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecipeDefinition {
+    pub ingredients: Vec<String>, // List of item IDs required
+    pub result: String, // Item ID produced
+    #[serde(default)]
+    pub catalysts: Vec<String>, // Item IDs that are required but not consumed
 }
 
 #[derive(Debug, Clone, Deserialize, Component)]
@@ -282,4 +291,18 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
     }
 
     info!("ItemDatabase loaded with {} items.", item_db.items.len());
+
+    // Mock Recipes
+    item_db.recipes = vec![
+        RecipeDefinition {
+            ingredients: vec!["steel_sword".to_string(), "whetstone".to_string()],
+            result: "hero_sword".to_string(), // Need to define this item if we want it to work fully
+            catalysts: vec![],
+        },
+        RecipeDefinition {
+            ingredients: vec!["health_potion".to_string(), "health_potion".to_string()],
+            result: "strong_health_potion".to_string(),
+            catalysts: vec![],
+        }
+    ];
 }
