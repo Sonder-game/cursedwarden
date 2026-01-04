@@ -107,8 +107,8 @@ fn spawn_city_ui(mut commands: Commands) {
         ));
 
         let buttons = [
-            ("Visit Market (Sword)", "sword_basic"),
-            ("Visit Slums (Dagger)", "dagger_rusty"),
+            ("Visit Market (Steel Sword)", "steel_sword"),
+            ("Visit Slums (Silver Dagger)", "silver_dagger"),
             ("Go to Inventory", "NEXT_PHASE"),
         ];
 
@@ -145,7 +145,7 @@ fn cleanup_city_ui(mut commands: Commands, q_root: Query<Entity, With<CityUiRoot
 }
 
 fn handle_city_buttons(
-    mut commands: Commands,
+    mut _commands: Commands,
     mut q_buttons: Query<(&Interaction, &CityButton, &mut BackgroundColor), (Changed<Interaction>, With<Button>)>,
     mut pending_items: ResMut<PendingItems>,
     mut next_state: ResMut<NextState<GameState>>,

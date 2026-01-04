@@ -13,6 +13,7 @@ impl Plugin for CombatPlugin {
             .register_type::<UnitType>()
             .register_type::<Team>()
             .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
+            .add_systems(OnExit(crate::plugins::core::GameState::NightPhase), teardown_combat)
             .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
             .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
     }
@@ -127,6 +128,12 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
             Team::Enemy,
         ));
     });
+}
+
+fn teardown_combat(mut commands: Commands, q_ui: Query<Entity, With<CombatUnitUi>>) {
+    for e in q_ui.iter() {
+        commands.entity(e).despawn_recursive();
+    }
 }
 
 fn update_combat_ui(

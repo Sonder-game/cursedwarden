@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::picking::PickingBehavior;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
 use crate::plugins::items::ItemDatabase;
@@ -9,7 +10,8 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, consume_pending_items))
+           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, consume_pending_items).chain())
+           .add_systems(OnExit(GameState::EveningPhase), hide_inventory_ui)
            .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
@@ -26,6 +28,9 @@ pub struct InventorySlot {
     pub x: i32,
     pub y: i32,
 }
+
+#[derive(Component)]
+pub struct InventoryUiRoot;
 
 #[derive(Component)]
 pub struct InventoryGridContainer;
@@ -117,8 +122,21 @@ fn resize_item_system(
     }
 }
 
-fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridState>) {
-    // Clear any previous state if needed, but ResMut handles current state
+fn hide_inventory_ui(mut q_root: Query<&mut Visibility, With<InventoryUiRoot>>) {
+    if let Ok(mut vis) = q_root.get_single_mut() {
+        *vis = Visibility::Hidden;
+    }
+}
+
+fn spawn_inventory_ui(
+    mut commands: Commands,
+    grid_state: ResMut<InventoryGridState>,
+    mut q_root: Query<&mut Visibility, With<InventoryUiRoot>>,
+) {
+    if let Ok(mut vis) = q_root.get_single_mut() {
+        *vis = Visibility::Visible;
+        return;
+    }
 
     // Root Node
     commands
@@ -132,6 +150,7 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                 ..default()
             },
             BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+            InventoryUiRoot,
         ))
         .with_children(|parent| {
             // Inventory Grid Container
@@ -370,6 +389,9 @@ fn handle_drag_start(
 
         // Bring to front (ZIndex(100))
         *z_index = ZIndex(100);
+
+        // Ignore picking for this entity so the drag target (slot) can be detected
+        commands.entity(entity).insert(PickingBehavior::IGNORE);
     }
 }
 
@@ -457,6 +479,7 @@ fn handle_drag_drop(
                  }
 
                  commands.entity(entity).remove::<DragOriginalPosition>();
+                 commands.entity(entity).remove::<PickingBehavior>();
                  return;
              }
         }
@@ -470,5 +493,6 @@ fn handle_drag_drop(
              node.top = original.top;
         }
         commands.entity(entity).remove::<DragOriginalPosition>();
+        commands.entity(entity).remove::<PickingBehavior>();
     }
 }

@@ -125,7 +125,7 @@ fn spawn_hud(mut commands: Commands) {
 struct StartCombatButton;
 
 fn update_hud(
-    mut commands: Commands,
+    mut _commands: Commands,
     state: Res<State<GameState>>,
     player_stats: Res<PlayerStats>,
     time: Res<GlobalTime>,
