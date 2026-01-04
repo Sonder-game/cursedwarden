@@ -12,7 +12,14 @@ impl Plugin for InventoryPlugin {
         app.init_resource::<InventoryGridState>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (
+               resize_item_system,
+               debug_spawn_item_system,
+               rotate_item_input_system,
+               synergy_system,
+               visualize_synergy_system,
+               consume_pending_items // Run during update to handle shop purchases immediately
+           ).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -181,6 +188,30 @@ impl InventoryGridState {
         }
         None
     }
+}
+
+// Recalculate stats for combat
+pub fn calculate_combat_stats(
+    inventory: &PersistentInventory,
+    item_db: &ItemDatabase,
+) -> crate::plugins::metagame::CombatStats {
+    let mut stats = crate::plugins::metagame::CombatStats::default();
+
+    // 1. Base Stats Sum
+    for saved in &inventory.items {
+        if let Some(def) = item_db.items.get(&saved.item_id) {
+            stats.attack += def.attack;
+            stats.defense += def.defense;
+            stats.speed += def.speed;
+        }
+    }
+
+    // 2. Synergy Calculation (Simplified re-implementation of evening logic without entities)
+    // This is complex because we need grid positions.
+    // For now, we rely on Base Stats.
+    // TODO: Full synergy calculation for persistent inventory.
+
+    stats
 }
 
 // Systems

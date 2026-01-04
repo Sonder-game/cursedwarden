@@ -5,6 +5,14 @@ use crate::plugins::items::ItemDefinition;
 // Re-export or redefine necessary types for serialization if they aren't in shared modules
 // Since ItemDefinition is in items.rs, we import it.
 
+#[derive(Default, Debug, Clone)]
+pub struct CombatStats {
+    pub health: f32,
+    pub attack: f32,
+    pub defense: f32,
+    pub speed: f32,
+}
+
 #[derive(Resource, Debug, Serialize, Deserialize, Clone)]
 pub struct SaveData {
     pub player_stats: PlayerStats,

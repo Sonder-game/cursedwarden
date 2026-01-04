@@ -33,6 +33,23 @@ pub struct ItemDefinition {
     pub defense: f32,
     #[serde(default)]
     pub speed: f32,
+
+    // Shop Stats
+    #[serde(default)]
+    pub rarity: ItemRarity,
+    #[serde(default)]
+    pub cost: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, Hash)]
+pub enum ItemRarity {
+    #[default]
+    Common,
+    Rare,
+    Epic,
+    Legendary,
+    Godly,
+    Unique,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Hash)]
@@ -121,6 +138,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+            rarity: ItemRarity::Common,
+            cost: 4,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -135,6 +154,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 8.0,
             defense: 0.0,
             speed: 5.0,
+            rarity: ItemRarity::Common,
+            cost: 3,
         },
         ItemDefinition {
             id: "health_potion".to_string(),
@@ -149,6 +170,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            rarity: ItemRarity::Common,
+            cost: 2,
         },
         ItemDefinition {
             id: "whetstone".to_string(),
@@ -184,6 +207,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            rarity: ItemRarity::Rare,
+            cost: 4,
         },
     ];
 
