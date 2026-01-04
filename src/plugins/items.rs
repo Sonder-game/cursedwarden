@@ -48,6 +48,11 @@ pub struct ItemDefinition {
     pub defense: f32,
     #[serde(default)]
     pub speed: f32,
+
+    #[serde(default)]
+    pub accuracy: f32,
+    #[serde(default)]
+    pub stamina_cost: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash, PartialOrd, Ord)]
@@ -154,6 +159,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+            accuracy: 90.0,
+            stamina_cost: 1.0,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -170,6 +177,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 8.0,
             defense: 0.0,
             speed: 5.0,
+            accuracy: 95.0,
+            stamina_cost: 0.8,
         },
         ItemDefinition {
             id: "health_potion".to_string(),
@@ -186,6 +195,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            accuracy: 100.0,
+            stamina_cost: 0.0,
         },
         ItemDefinition {
             id: "whetstone".to_string(),
@@ -223,6 +234,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            accuracy: 100.0,
+            stamina_cost: 0.0,
         },
         // Adding more items to test rarity
         ItemDefinition {
@@ -240,6 +253,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 2.0,
             defense: 20.0,
             speed: -2.0,
+            accuracy: 80.0,
+            stamina_cost: 2.0,
         },
         ItemDefinition {
             id: "legendary_bow".to_string(),
@@ -256,6 +271,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 15.0,
             defense: 0.0,
             speed: 10.0,
+            accuracy: 98.0,
+            stamina_cost: 1.5,
         },
         ItemDefinition {
              id: "unique_charm".to_string(),
@@ -272,6 +289,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
              attack: 0.0,
              defense: 0.0,
              speed: 0.0,
+             accuracy: 100.0,
+             stamina_cost: 0.0,
         },
     ];
 

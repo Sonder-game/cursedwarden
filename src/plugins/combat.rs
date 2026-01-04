@@ -51,7 +51,9 @@ fn spawn_combat_arena(
         commands.entity(e).despawn_recursive();
     }
 
-    let stats = crate::plugins::inventory::calculate_combat_stats(&persistent_inventory, &item_db);
+    // Use the BattleBridge to get snapshot
+    let (stats, battle_items) = crate::plugins::inventory::create_battle_snapshot(&persistent_inventory, &item_db);
+
     let base_hp = 100.0;
     let final_hp = base_hp + stats.health;
 
@@ -70,38 +72,98 @@ fn spawn_combat_arena(
         CombatUnitUi, // Tag to cleanup later
     ))
     .with_children(|parent| {
-        // Player Side
-        parent.spawn((
+        // Player Side (Container)
+        let mut player_entity_cmds = parent.spawn((
             Node {
-                width: Val::Px(200.0),
-                height: Val::Px(300.0),
+                width: Val::Px(300.0), // Wider to hold items
+                height: Val::Px(500.0),
                 border: UiRect::all(Val::Px(2.0)),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexStart,
+                padding: UiRect::all(Val::Px(10.0)),
                 ..default()
             },
             BorderColor(Color::srgb(0.0, 0.0, 1.0)),
             BackgroundColor(Color::srgb(0.2, 0.2, 0.5)),
-        ))
-        .with_children(|p| {
+        ));
+
+        player_entity_cmds.with_children(|p| {
+             // Hero Stats
              p.spawn((
-                Text::new(format!("Player Unit\nHuman\nHP: {:.0}/{:.0}", final_hp, final_hp)),
+                Text::new(format!("Player\nHP: {:.0}/{:.0}\nDef: {:.0}", final_hp, final_hp, stats.defense)),
                 TextFont { font_size: 16.0, ..default() },
                 TextColor(Color::WHITE),
              ));
         })
         .insert((
             Health { current: final_hp, max: final_hp },
-            Attack { value: stats.attack.max(1.0) },
+            // Player entity itself doesn't attack, items do. But we keep components for safety/targeting.
+            Attack { value: 0.0 },
             Defense { value: stats.defense },
-            Speed { value: stats.speed.max(5.0) },
+            Speed { value: 0.0 },
+            // Player doesn't need ActionMeter, but components might expect it.
+            // We'll leave it but not increment it.
             ActionMeter::default(),
             UnitType::Human,
             MaterialType::Steel,
             Team::Player,
+            Stamina { current: 10.0, max: 10.0 }, // Base Stamina
         ));
+
+        // Spawn Active Battle Items as Children
+        player_entity_cmds.with_children(|p| {
+             p.spawn(Node {
+                 height: Val::Px(20.0),
+                 ..default()
+             }); // Spacer
+
+             for item in battle_items {
+                 p.spawn((
+                     Node {
+                         width: Val::Percent(90.0),
+                         height: Val::Px(40.0),
+                         margin: UiRect::bottom(Val::Px(5.0)),
+                         padding: UiRect::all(Val::Px(5.0)),
+                         display: Display::Flex,
+                         flex_direction: FlexDirection::Column,
+                         justify_content: JustifyContent::Center,
+                         ..default()
+                     },
+                     BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+                 ))
+                 .with_children(|item_ui| {
+                     item_ui.spawn((
+                         Text::new(format!("{} (Dmg: {:.1})", item.name, item.damage)),
+                         TextFont { font_size: 14.0, ..default() },
+                         TextColor(Color::WHITE),
+                     ));
+                     item_ui.spawn((
+                         Text::new("Loading..."),
+                         TextFont { font_size: 12.0, ..default() },
+                         TextColor(Color::srgb(0.8, 0.8, 1.0)),
+                         CombatLog, // Tag to update this text
+                     ));
+                 })
+                 .insert((
+                     Attack { value: item.damage },
+                     Speed { value: item.cooldown }, // Uses cooldown logic
+                     ActionMeter { value: 0.0, threshold: 1000.0 },
+                     // Convert items::MaterialType to combat::MaterialType
+                     match item.material {
+                         crate::plugins::items::MaterialType::Steel => MaterialType::Steel,
+                         crate::plugins::items::MaterialType::Silver => MaterialType::Silver,
+                         crate::plugins::items::MaterialType::Flesh => MaterialType::Flesh,
+                     },
+                     Team::Player, // Belongs to player team
+                     CombatItemTag {
+                         accuracy: item.accuracy,
+                         stamina_cost: item.stamina_cost
+                     }
+                 ));
+             }
+        });
 
         // VS Text
         parent.spawn((
@@ -113,8 +175,8 @@ fn spawn_combat_arena(
         // Enemy Side
         parent.spawn((
             Node {
-                width: Val::Px(200.0),
-                height: Val::Px(300.0),
+                width: Val::Px(300.0),
+                height: Val::Px(500.0),
                 border: UiRect::all(Val::Px(2.0)),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
@@ -146,25 +208,52 @@ fn spawn_combat_arena(
 }
 
 fn update_combat_ui(
-    q_units: Query<(&Health, &UnitType, &ActionMeter, &Children)>,
+    q_units: Query<(&Health, &UnitType, &Defense, Option<&Stamina>, &Children)>, // Player/Enemy Main Units
+    q_items: Query<(&ActionMeter, &Children), With<CombatItemTag>>, // Items
     mut q_text: Query<&mut Text>,
 ) {
-    for (health, unit_type, meter, children) in q_units.iter() {
+    // Update Main Units
+    for (health, unit_type, defense, stamina, children) in q_units.iter() {
+        // Find the text child directly under the unit
         for &child in children.iter() {
-            if let Ok(mut text) = q_text.get_mut(child) {
-                let type_name = match unit_type {
-                    UnitType::Human => "Human",
-                    UnitType::Monster => "Monster",
-                    UnitType::Ethereal => "Ethereal",
-                };
-                **text = format!(
-                    "{}\nHP: {:.0}/{:.0}\nMeter: {:.0}%",
-                    type_name,
-                    health.current,
-                    health.max,
-                    (meter.value / meter.threshold * 100.0).clamp(0.0, 100.0)
-                );
-            }
+             // We only want to update the main label, which is usually the first text child.
+             // But items are also children. We can distinguish by looking if the child has children?
+             // Or simpler: The first child of the Unit is the Text.
+
+             if let Ok(mut text) = q_text.get_mut(child) {
+                 if text.as_str().contains("HP:") { // Hacky check to ensure we update the stat block
+                     let type_name = match unit_type {
+                        UnitType::Human => "Human",
+                        UnitType::Monster => "Monster",
+                        UnitType::Ethereal => "Ethereal",
+                    };
+                    let stamina_str = if let Some(s) = stamina { format!("\nStamina: {:.1}", s.current) } else { "".to_string() };
+
+                    **text = format!(
+                        "{}\nHP: {:.0}/{:.0}\nDef: {:.0}{}",
+                        type_name,
+                        health.current,
+                        health.max,
+                        defense.value,
+                        stamina_str
+                    );
+                 }
+             }
+        }
+    }
+
+    // Update Items
+    for (meter, children) in q_items.iter() {
+        for &child in children.iter() {
+             if let Ok(mut text) = q_text.get_mut(child) {
+                 // The item has 2 text children, one static name, one dynamic status.
+                 // We tagged dynamic status with CombatLog.
+                 // Wait, we can't query CombatLog here easily without traversing.
+                 // Let's just check if it's the loading/meter text.
+                 if text.as_str().contains("Meter") || text.as_str().contains("Loading") || text.as_str().contains("%") {
+                     **text = format!("Meter: {:.0}%", (meter.value / meter.threshold * 100.0).clamp(0.0, 100.0));
+                 }
+             }
         }
     }
 }
@@ -191,7 +280,7 @@ pub struct Defense {
 #[derive(Component, Reflect, Default, Debug, Clone, Copy)]
 #[reflect(Component)]
 pub struct Speed {
-    pub value: f32,
+    pub value: f32, // For items, this is speed/cooldown rate
 }
 
 #[derive(Component, Reflect, Debug, Clone, Copy)]
@@ -199,6 +288,20 @@ pub struct Speed {
 pub struct ActionMeter {
     pub value: f32,
     pub threshold: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Stamina {
+    pub current: f32,
+    pub max: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct CombatItemTag {
+    pub accuracy: f32,
+    pub stamina_cost: f32,
 }
 
 impl Default for ActionMeter {
@@ -266,81 +369,109 @@ pub fn calculate_damage(
     }
 }
 
-pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
-    for (speed, mut meter) in query.iter_mut() {
+pub fn tick_timer_system(
+    mut q_meters: Query<(&Speed, &mut ActionMeter)>,
+    mut q_stamina: Query<&mut Stamina>,
+) {
+    // Tick meters
+    for (speed, mut meter) in q_meters.iter_mut() {
         meter.value += speed.value;
+    }
+
+    // Regen stamina
+    for mut stamina in q_stamina.iter_mut() {
+        if stamina.current < stamina.max {
+            stamina.current = (stamina.current + 0.05).min(stamina.max); // ~3 stamina per sec
+        }
     }
 }
 
 pub fn combat_turn_system(
     mut commands: Commands,
-    mut q_units: Query<(Entity, &mut ActionMeter, &Attack, &Defense, &mut Health, &Team, &MaterialType, &UnitType)>,
+    mut q_movers: Query<(Entity, &mut ActionMeter, &Attack, &Speed, &Team, Option<&MaterialType>, Option<&CombatItemTag>, Option<&Parent>)>,
+    mut q_targets: Query<(Entity, &Team, &mut Health, &Defense, &UnitType)>,
+    mut q_parents: Query<&mut Stamina>,
     mut next_state: ResMut<NextState<crate::plugins::core::GameState>>,
 ) {
-    // Collect all potential targets first to avoid borrow checker issues with double iteration
-    let mut ready_units = Vec::new();
-    for (entity, meter, _, _, _, team, _, _) in q_units.iter() {
+    // Identify units ready to act
+    // Note: q_movers includes both Main Units (like Enemy) and Item Entities (Player Weapons).
+    // Enemy Unit has Attack, Speed, Team, Material, etc.
+    // Item Entity has Attack, Speed, Team, Material, CombatItemTag.
+
+    let mut actions = Vec::new();
+
+    for (entity, meter, attack, _, team, material, tag, parent) in q_movers.iter() {
         if meter.value >= meter.threshold {
-            ready_units.push((entity, *team));
+            // Copy all data to avoid borrowing q_movers
+            actions.push((entity, *team, attack.value, material.copied(), tag.copied(), parent.map(|p| p.get())));
         }
     }
 
-    for (attacker_entity, attacker_team) in ready_units {
-        let (attacker_damage, attacker_material) =
-            if let Ok((_, mut meter, attack, _, _, _, material, _)) = q_units.get_mut(attacker_entity) {
-                 if meter.value < meter.threshold { continue; }
-                 meter.value -= meter.threshold;
-                 (attack.value, *material)
-            } else {
-                continue;
-            };
+    for (entity, team, damage, material_opt, tag_opt, parent_entity_opt) in actions {
 
-        // Find target
-        let mut target_entity_opt = None;
-        let mut target_defense_val = 0.0;
-        let mut target_unit_type_val = UnitType::Human;
-
-        for (candidate_entity, _, _, defense, health, team, _, unit_type) in q_units.iter() {
-            if *team != attacker_team && health.current > 0.0 {
-                target_entity_opt = Some(candidate_entity);
-                target_defense_val = defense.value;
-                target_unit_type_val = *unit_type;
-                break;
+        // Check Stamina if item
+        if let Some(tag) = tag_opt {
+            if let Some(parent_entity) = parent_entity_opt {
+                if let Ok(mut stamina) = q_parents.get_mut(parent_entity) {
+                    if stamina.current < tag.stamina_cost {
+                        // Fizzle / Wait for stamina
+                        // For now, let's just not attack but keep the meter full?
+                        // Or burn meter and do nothing?
+                        // Backpack Battles slows down attack if no stamina.
+                        // Let's just return early (skip this attack)
+                        continue;
+                    }
+                    stamina.current -= tag.stamina_cost;
+                }
             }
         }
 
-        if let Some(target_entity) = target_entity_opt {
-             let damage = calculate_damage(attacker_damage, attacker_material, target_unit_type_val, target_defense_val);
+        // Reset Meter
+        if let Ok((_, mut meter, _, _, _, _, _, _)) = q_movers.get_mut(entity) {
+             meter.value -= meter.threshold;
+        }
 
-             info!("Unit {:?} ({:?}) attacks {:?} for {:.1} damage!", attacker_entity, attacker_team, target_entity, damage);
+        // Find Target
+        let mut target = None;
+        for (t_entity, t_team, _, t_def, t_type) in q_targets.iter() {
+            if *t_team != team {
+                target = Some((t_entity, t_def.value, *t_type));
+                break; // Attack first valid target (1v1)
+            }
+        }
 
-             if let Ok((_, _, _, _, mut health, _, _, _)) = q_units.get_mut(target_entity) {
-                 health.current -= damage;
-                 if health.current <= 0.0 {
-                     info!("Unit {:?} died!", target_entity);
-                     commands.entity(target_entity).despawn_recursive();
-                 }
+        if let Some((target_entity, target_def, target_type)) = target {
+            let material = material_opt.unwrap_or(MaterialType::Steel); // Default
+            let final_damage = calculate_damage(damage, material, target_type, target_def);
+
+            info!("Entity {:?} attacks {:?} for {:.1} damage!", entity, target_entity, final_damage);
+
+            if let Ok((_, _, mut health, _, _)) = q_targets.get_mut(target_entity) {
+                health.current -= final_damage;
+                if health.current <= 0.0 {
+                    // commands.entity(target_entity).despawn_recursive(); // Don't despawn immediately, just mark dead or let cleanup handle
+                }
+            }
+        }
+    }
+
+    // Check Game Over
+    let mut player_hp = 0.0;
+    let mut enemy_hp = 0.0;
+
+    for (_, team, health, _, _) in q_targets.iter() {
+        if health.current > 0.0 {
+             match team {
+                 Team::Player => player_hp = health.current,
+                 Team::Enemy => enemy_hp = health.current,
              }
         }
     }
 
-    // Check game over / victory conditions
-    let mut player_alive = false;
-    let mut enemy_alive = false;
-
-    for (_, _, _, _, health, team, _, _) in q_units.iter() {
-        if health.current > 0.0 {
-            match team {
-                Team::Player => player_alive = true,
-                Team::Enemy => enemy_alive = true,
-            }
-        }
-    }
-
-    if !player_alive {
+    if player_hp <= 0.0 {
         info!("Player Defeated! Returning to City...");
         next_state.set(crate::plugins::core::GameState::DayPhase);
-    } else if !enemy_alive {
+    } else if enemy_hp <= 0.0 {
         info!("Victory! Returning to City...");
         next_state.set(crate::plugins::core::GameState::DayPhase);
     }

@@ -190,31 +190,147 @@ pub struct CombatStats {
     pub health: f32,
 }
 
-pub fn calculate_combat_stats(
+// Represents a flat combat entity for an active item
+#[derive(Debug, Clone)]
+pub struct BattleItem {
+    pub item_id: String,
+    pub name: String,
+    pub cooldown: f32, // based on speed
+    pub damage: f32,
+    pub accuracy: f32,
+    pub stamina_cost: f32,
+    pub material: crate::plugins::items::MaterialType,
+}
+
+// Instruction 5: BattleBridge
+pub fn create_battle_snapshot(
     inventory: &PersistentInventory,
     item_db: &ItemDatabase,
-) -> CombatStats {
-    let mut stats = CombatStats {
-        attack: 0.0,
+) -> (CombatStats, Vec<BattleItem>) {
+    // 1. Reconstruct Grid from Persistent Data
+    // We use a dummy entity ID system here since we don't have real entities.
+    // We map GridPos -> Index in inventory.items
+    let mut grid_map: HashMap<IVec2, usize> = HashMap::new();
+
+    for (idx, saved_item) in inventory.items.iter().enumerate() {
+        if let Some(def) = item_db.items.get(&saved_item.item_id) {
+            let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+            let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, saved_item.rotation);
+            for offset in rotated_shape {
+                grid_map.insert(pos + offset, idx);
+            }
+        }
+    }
+
+    // 2. Calculate Stats & Synergies
+    let mut battle_items = Vec::new();
+    let mut global_stats = CombatStats {
+        attack: 0.0, // Global attack might not be used if we use individual items, but we keep it for now
         defense: 0.0,
         speed: 0.0,
         health: 0.0,
     };
 
-    // Note: This logic duplicates synergy calculation a bit because we don't persist ActiveSynergies properly.
-    // In a real implementation, we should run the synergy logic on the persistent data or simulate the grid.
-    // For now, we just sum base stats.
-    // TODO: Implement synergy calculation for combat snapshot
+    // Temporary storage for bonuses: Index -> List of buffs
+    let mut bonuses: HashMap<usize, Vec<(StatType, f32)>> = HashMap::new();
 
-    for saved_item in &inventory.items {
-        if let Some(def) = item_db.items.get(&saved_item.item_id) {
-            stats.attack += def.attack;
-            stats.defense += def.defense;
-            stats.speed += def.speed;
-            // stats.health += def.health; // if we had health on items
+    for (idx, saved_item) in inventory.items.iter().enumerate() {
+        let def = match item_db.items.get(&saved_item.item_id) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        if def.synergies.is_empty() { continue; }
+
+        let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+
+        for synergy in &def.synergies {
+             // Rotate offset
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], saved_item.rotation);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0];
+
+             let target_pos = pos + rotated_offset;
+
+             if let Some(&target_idx) = grid_map.get(&target_pos) {
+                  let target_item = &inventory.items[target_idx];
+                  if let Some(target_def) = item_db.items.get(&target_item.item_id) {
+                      // Check tags
+                      let has_tag = synergy.target_tags.iter().any(|req| target_def.tags.contains(req));
+                      if has_tag {
+                          match synergy.effect {
+                              SynergyEffect::BuffTarget { stat, value } => {
+                                  bonuses.entry(target_idx).or_default().push((stat, value));
+                              },
+                              SynergyEffect::BuffSelf { stat, value } => {
+                                  bonuses.entry(idx).or_default().push((stat, value));
+                              }
+                          }
+                      }
+                  }
+             }
         }
     }
 
+    // 3. Finalize Items
+    for (idx, saved_item) in inventory.items.iter().enumerate() {
+        let def = match item_db.items.get(&saved_item.item_id) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let mut current_attack = def.attack;
+        let mut current_defense = def.defense;
+        let mut current_speed = def.speed;
+        let mut current_accuracy = def.accuracy;
+        let mut current_stamina_cost = def.stamina_cost;
+
+        // Apply bonuses
+        if let Some(buffs) = bonuses.get(&idx) {
+            for (stat, val) in buffs {
+                match stat {
+                    StatType::Attack => current_attack += val,
+                    StatType::Defense => current_defense += val,
+                    StatType::Speed => current_speed += val,
+                    StatType::Health => global_stats.health += val, // Health usually global
+                }
+            }
+        }
+
+        // Aggregate Global Stats (Passive items)
+        global_stats.defense += current_defense;
+        global_stats.health += 0.0; // Add item base health if any (currently ItemDefinition has no base health, only synergy)
+
+        // If item is a weapon or has active effect (Attack > 0 or specific type)
+        // For now, we consider anything with attack > 0 as a BattleItem
+        if current_attack > 0.0 {
+            battle_items.push(BattleItem {
+                item_id: def.id.clone(),
+                name: def.name.clone(),
+                damage: current_attack,
+                // Speed in ItemDefinition is arbitrary.
+                // In combat.rs, ActionMeter += Speed. Threshold is 1000.
+                // So Speed 10 means 100 ticks (approx 1.6s at 60fps) to attack.
+                // Base speed 10.0 + stat bonus.
+                cooldown: (10.0 + current_speed).max(1.0),
+                accuracy: current_accuracy,
+                stamina_cost: current_stamina_cost,
+                material: def.material,
+            });
+        }
+    }
+
+    (global_stats, battle_items)
+}
+
+#[allow(dead_code)] // Keeping old function for compatibility if needed, but redirects to new logic logic partially
+pub fn calculate_combat_stats(
+    inventory: &PersistentInventory,
+    item_db: &ItemDatabase,
+) -> CombatStats {
+    let (stats, _) = create_battle_snapshot(inventory, item_db);
+    // This legacy function only returns globals, effectively ignoring individual weapon stats
+    // But since the new combat system uses create_battle_snapshot directly, this might be deprecated.
     stats
 }
 
