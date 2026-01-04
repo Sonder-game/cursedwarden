@@ -13,6 +13,8 @@ pub struct ItemDefinition {
     pub name: String,
     pub width: u8,
     pub height: u8,
+    #[serde(default)] // Allow omitting shape in JSON/RON if we generate it
+    pub shape: Vec<IVec2>,
     #[allow(dead_code)]
     pub material: MaterialType,
     #[allow(dead_code)]
@@ -50,12 +52,13 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
     // For now, we mock the database loading.
     // In a real implementation, this would load from assets/items/*.ron
 
-    let items = vec![
+    let mut items = vec![
         ItemDefinition {
             id: "steel_sword".to_string(),
             name: "Steel Sword".to_string(),
             width: 1,
             height: 2,
+            shape: vec![], // Will be populated below
             material: MaterialType::Steel,
             item_type: ItemType::Weapon,
         },
@@ -64,6 +67,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             name: "Silver Dagger".to_string(),
             width: 1,
             height: 1,
+            shape: vec![],
             material: MaterialType::Silver,
             item_type: ItemType::Weapon,
         },
@@ -72,10 +76,22 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             name: "Health Potion".to_string(),
             width: 1,
             height: 1,
-            material: MaterialType::Flesh, // Potions are weird in this setting? Or glass/fluid. GDD says flesh replaces steel.
+            shape: vec![],
+            material: MaterialType::Flesh,
             item_type: ItemType::Consumable,
         },
     ];
+
+    // Auto-generate rectangular shapes if empty
+    for item in items.iter_mut() {
+        if item.shape.is_empty() {
+            for y in 0..item.height {
+                for x in 0..item.width {
+                    item.shape.push(IVec2::new(x as i32, y as i32));
+                }
+            }
+        }
+    }
 
     for item in items {
         item_db.items.insert(item.id.clone(), item);
