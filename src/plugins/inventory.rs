@@ -444,75 +444,77 @@ fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
     mut q_item: Query<(&mut ZIndex, &mut Node, &ItemSize, &mut GridPosition), With<Item>>,
-    q_slots: Query<&InventorySlot>,
     q_original: Query<&DragOriginalPosition>,
     mut grid_state: ResMut<InventoryGridState>,
 ) {
     let entity = trigger.entity();
-    let event = trigger.event();
 
-    // Check if dropped on a slot
-    let mut dropped_on_slot = false;
-    let mut target_x = 0;
-    let mut target_y = 0;
+    if let Ok((mut z_index, mut node, size, mut grid_pos)) = q_item.get_mut(entity) {
+        let mut left_val = 0.0;
+        let mut top_val = 0.0;
 
-    if let Ok(slot) = q_slots.get(event.target) {
-        dropped_on_slot = true;
-        target_x = slot.x;
-        target_y = slot.y;
-    }
+        if let Val::Px(l) = node.left { left_val = l; }
+        if let Val::Px(t) = node.top { top_val = t; }
 
-    if dropped_on_slot {
-        if let Ok((mut z_index, mut node, size, mut grid_pos)) = q_item.get_mut(entity) {
-             // Basic validation and collision check
-             if grid_state.is_area_free(IVec2::new(target_x, target_y), *size, Some(entity)) {
-                 // Clear old grid positions
-                 for dy in 0..size.height {
-                     for dx in 0..size.width {
-                         let old_pos = IVec2::new(grid_pos.x + dx, grid_pos.y + dy);
-                         if let Some(occupier) = grid_state.cells.get(&old_pos) {
-                             if *occupier == entity {
-                                 grid_state.cells.remove(&old_pos);
-                             }
+        // Grid parameters (must match spawn_inventory_ui)
+        let padding = 10.0;
+        let slot_size = 50.0;
+        let gap = 2.0;
+        let stride = slot_size + gap; // 52.0
+
+        // Calculate closest grid index based on top-left corner
+        // Using round() to snap to the nearest slot center effectively
+        let target_x = ((left_val - padding) / stride).round() as i32;
+        let target_y = ((top_val - padding) / stride).round() as i32;
+
+        let target_pos = IVec2::new(target_x, target_y);
+
+        // Basic validation and collision check
+        if grid_state.is_area_free(target_pos, *size, Some(entity)) {
+             // Clear old grid positions
+             for dy in 0..size.height {
+                 for dx in 0..size.width {
+                     let old_pos = IVec2::new(grid_pos.x + dx, grid_pos.y + dy);
+                     if let Some(occupier) = grid_state.cells.get(&old_pos) {
+                         if *occupier == entity {
+                             grid_state.cells.remove(&old_pos);
                          }
                      }
                  }
-
-                 // Set new grid positions
-                 for dy in 0..size.height {
-                     for dx in 0..size.width {
-                         let new_pos = IVec2::new(target_x + dx, target_y + dy);
-                         grid_state.cells.insert(new_pos, entity);
-                     }
-                 }
-
-                 // If valid, snap to slot
-                 // Assuming 50px slots + 2px gaps + 10px padding.
-                 // Calculation: 10 + x * (50 + 2)
-                 let new_left = 10.0 + target_x as f32 * 52.0;
-                 let new_top = 10.0 + target_y as f32 * 52.0;
-
-                 node.left = Val::Px(new_left);
-                 node.top = Val::Px(new_top);
-
-                 // Update logical position
-                 grid_pos.x = target_x;
-                 grid_pos.y = target_y;
-
-                 // Restore Z-Index (maybe +1 so it sits above grid but not everything)
-                 if let Ok(original) = q_original.get(entity) {
-                      *z_index = original.z_index;
-                 } else {
-                      *z_index = ZIndex(0);
-                 }
-
-                 commands.entity(entity).remove::<DragOriginalPosition>();
-                 return;
              }
+
+             // Set new grid positions
+             for dy in 0..size.height {
+                 for dx in 0..size.width {
+                     let new_pos = IVec2::new(target_x + dx, target_y + dy);
+                     grid_state.cells.insert(new_pos, entity);
+                 }
+             }
+
+             // Snap to exact slot position
+             let new_left = padding + target_x as f32 * stride;
+             let new_top = padding + target_y as f32 * stride;
+
+             node.left = Val::Px(new_left);
+             node.top = Val::Px(new_top);
+
+             // Update logical position
+             grid_pos.x = target_x;
+             grid_pos.y = target_y;
+
+             // Restore Z-Index
+             if let Ok(original) = q_original.get(entity) {
+                  *z_index = original.z_index;
+             } else {
+                  *z_index = ZIndex(0);
+             }
+
+             commands.entity(entity).remove::<DragOriginalPosition>();
+             return;
         }
     }
 
-    // If invalid or not dropped on slot, revert
+    // If invalid or out of bounds, revert
     if let Ok(original) = q_original.get(entity) {
         if let Ok((mut z_index, mut node, _, _)) = q_item.get_mut(entity) {
              *z_index = original.z_index;
