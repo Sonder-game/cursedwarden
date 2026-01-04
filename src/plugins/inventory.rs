@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
+use bevy::prelude::OnEnter;
+use bevy::prelude::OnExit;
+use bevy::prelude::in_state;
 use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
@@ -9,10 +12,11 @@ pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
+        use bevy::prelude::in_state;
         app.init_resource::<InventoryGridState>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system, draw_inventory_links_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -23,6 +27,9 @@ impl Plugin for InventoryPlugin {
 pub struct ItemSpawnedEvent(pub Entity);
 
 // Components
+#[derive(Component)]
+pub struct LinkLine;
+
 #[derive(Component, Debug, Clone, Copy)]
 pub struct InventorySlot {
     pub x: i32,
@@ -287,6 +294,162 @@ fn synergy_system(
             }
         }
     }
+}
+
+fn draw_inventory_links_system(
+    mut commands: Commands,
+    q_lines: Query<Entity, With<LinkLine>>,
+    q_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition, &Node)>,
+    grid_state: Res<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    // 1. Clear old lines
+    for entity in q_lines.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+
+    let container = match q_container.get_single() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let get_center = |node: &Node, width_slots: i32, height_slots: i32| -> Vec2 {
+        let left = if let Val::Px(l) = node.left { l } else { 0.0 };
+        let top = if let Val::Px(t) = node.top { t } else { 0.0 };
+        // Center is left + width/2
+        // Width in Px is calculated as: slots * 50 + (slots-1) * 2
+        let width_px = width_slots as f32 * 50.0 + (width_slots - 1) as f32 * 2.0;
+        let height_px = height_slots as f32 * 50.0 + (height_slots - 1) as f32 * 2.0;
+        Vec2::new(left + width_px / 2.0, top + height_px / 2.0)
+    };
+
+    // 2. Draw Synergy Links (Green)
+    for (entity, pos, rot, def, node) in q_items.iter() {
+        if def.synergies.is_empty() { continue; }
+
+        for synergy in &def.synergies {
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], rot.value);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0];
+             let target_pos = IVec2::new(pos.x, pos.y) + rotated_offset;
+
+             if let Some(cell) = grid_state.grid.get(&target_pos) {
+                 if let CellState::Occupied(target_entity) = cell.state {
+                      if target_entity == entity { continue; } // Should not happen but safe guard
+                      if let Ok((_, _, _, target_def, target_node)) = q_items.get(target_entity) {
+                          if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
+                               let (min_x, min_y, w, h) = InventoryGridState::calculate_bounding_box(&def.shape, rot.value);
+                               let start = get_center(node, w, h);
+                               // Need target size for center
+                               let (_, _, tw, th) = InventoryGridState::calculate_bounding_box(&target_def.shape, 0); // Assuming target not rotated? No we need target rot.
+                               // Wait, we can't get target rot easily without querying it.
+                               // We have target_entity, let's look it up in q_items loop?
+                               // Actually we did look it up: `q_items.get(target_entity)`
+
+                               // Retrieve target rotation from the query result we just did?
+                               // Ah, I didn't capture rotation in `q_items.get(target_entity)`. Let's fix.
+                               if let Ok((_, _, target_rot, _, target_node)) = q_items.get(target_entity) {
+                                   let (_, _, tw, th) = InventoryGridState::calculate_bounding_box(&target_def.shape, target_rot.value);
+                                   let end = get_center(target_node, tw, th);
+                                   spawn_link_line(&mut commands, container, start, end, Color::srgb(0.0, 1.0, 0.0), 2.0);
+                               }
+                          }
+                      }
+                 }
+             }
+        }
+    }
+
+    // 3. Draw Recipe Links (Gold)
+    // Naive n^2 check is fine for small inventory
+    let items_vec: Vec<_> = q_items.iter().collect();
+    for i in 0..items_vec.len() {
+        for j in (i+1)..items_vec.len() {
+            let (e1, p1, r1, d1, n1) = items_vec[i];
+            let (e2, p2, r2, d2, n2) = items_vec[j];
+
+            // Check if neighbors
+            // Simple manhattan distance check between bounding boxes?
+            // Actually, "neighbors" means adjacent cells.
+            // Bounding box collision + 1 px expansion?
+            // Let's check logic: if any cell of Item A is adjacent to any cell of Item B.
+
+            let shape1 = InventoryGridState::get_rotated_shape(&d1.shape, r1.value);
+            let shape2 = InventoryGridState::get_rotated_shape(&d2.shape, r2.value);
+
+            let mut is_neighbor = false;
+            'outer: for o1 in &shape1 {
+                let c1 = IVec2::new(p1.x, p1.y) + *o1;
+                for o2 in &shape2 {
+                    let c2 = IVec2::new(p2.x, p2.y) + *o2;
+                    if (c1 - c2).abs().element_sum() == 1 {
+                        is_neighbor = true;
+                        break 'outer;
+                    }
+                }
+            }
+
+            if is_neighbor {
+                // Check recipes
+                for recipe in &item_db.recipes {
+                    if recipe.ingredients.len() == 2 {
+                        let has_1 = recipe.ingredients.contains(&d1.id);
+                        let has_2 = recipe.ingredients.contains(&d2.id);
+                        if has_1 && has_2 {
+                             // Handle case where ingredients are same item (e.g. 2x Dagger)
+                             if d1.id == d2.id {
+                                 // recipe requires 2 of same, we have 2. good.
+                             } else {
+                                 // different items.
+                             }
+
+                             let (min_x, min_y, w, h) = InventoryGridState::calculate_bounding_box(&d1.shape, r1.value);
+                             let start = get_center(n1, w, h);
+
+                             let (min_x2, min_y2, w2, h2) = InventoryGridState::calculate_bounding_box(&d2.shape, r2.value);
+                             let end = get_center(n2, w2, h2);
+
+                             spawn_link_line(&mut commands, container, start, end, Color::srgb(1.0, 0.84, 0.0), 4.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn spawn_link_line(
+    commands: &mut Commands,
+    parent: Entity,
+    start: Vec2,
+    end: Vec2,
+    color: Color,
+    thickness: f32,
+) {
+    let diff = end - start;
+    let length = diff.length();
+    let angle = diff.y.atan2(diff.x);
+    let center = (start + end) / 2.0;
+
+    commands.spawn((
+        Node {
+            width: Val::Px(length),
+            height: Val::Px(thickness),
+            position_type: PositionType::Absolute,
+            left: Val::Px(center.x - length / 2.0),
+            top: Val::Px(center.y - thickness / 2.0),
+            ..default()
+        },
+        BackgroundColor(color),
+        LinkLine,
+        // Manual rotation via transform since Node rotation is tricky in layout?
+        // Actually Bevy UI supports Transform.
+        Transform::from_rotation(Quat::from_rotation_z(angle)),
+        // We need to ensure Z-index is above items? Or below?
+        // Usually on top to be seen.
+        ZIndex(200),
+    )).set_parent(parent);
 }
 
 fn resize_item_system(

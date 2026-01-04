@@ -5,6 +5,13 @@ use serde::Deserialize;
 #[derive(Resource, Default)]
 pub struct ItemDatabase {
     pub items: HashMap<String, ItemDefinition>,
+    pub recipes: Vec<RecipeDefinition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecipeDefinition {
+    pub ingredients: Vec<String>,
+    pub result: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Component)]
@@ -129,7 +136,47 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
     // For now, we mock the database loading.
     // In a real implementation, this would load from assets/items/*.ron
 
+    // Load Recipes
+    item_db.recipes = vec![
+        RecipeDefinition {
+            ingredients: vec!["wooden_sword".to_string(), "whetstone".to_string()],
+            result: "hero_sword".to_string(),
+        }
+    ];
+
     let mut items = vec![
+        ItemDefinition {
+            id: "wooden_sword".to_string(),
+            name: "Wooden Sword".to_string(),
+            width: 1,
+            height: 2,
+            shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Common,
+            price: 3,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 5.0,
+            defense: 0.0,
+            speed: 0.0,
+        },
+        ItemDefinition {
+            id: "hero_sword".to_string(),
+            name: "Hero Sword".to_string(),
+            width: 1,
+            height: 2,
+            shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Rare,
+            price: 8,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 15.0,
+            defense: 0.0,
+            speed: 2.0,
+        },
         ItemDefinition {
             id: "steel_sword".to_string(),
             name: "Steel Sword".to_string(),
