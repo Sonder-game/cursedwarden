@@ -13,6 +13,7 @@ pub struct ItemDefinition {
     pub name: String,
     pub width: u8,
     pub height: u8,
+    pub cost: u32,
     #[allow(dead_code)]
     pub material: MaterialType,
     #[allow(dead_code)]
@@ -56,6 +57,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             name: "Steel Sword".to_string(),
             width: 1,
             height: 2,
+            cost: 4,
             material: MaterialType::Steel,
             item_type: ItemType::Weapon,
         },
@@ -64,6 +66,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             name: "Silver Dagger".to_string(),
             width: 1,
             height: 1,
+            cost: 3,
             material: MaterialType::Silver,
             item_type: ItemType::Weapon,
         },
@@ -72,7 +75,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             name: "Health Potion".to_string(),
             width: 1,
             height: 1,
-            material: MaterialType::Flesh, // Potions are weird in this setting? Or glass/fluid. GDD says flesh replaces steel.
+            cost: 2,
+            material: MaterialType::Flesh,
             item_type: ItemType::Consumable,
         },
     ];

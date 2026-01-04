@@ -132,6 +132,7 @@ fn test_save_data_creation() {
             id: "test_sword".to_string(),
             name: "Test".to_string(),
             width: 1, height: 1,
+            cost: 10,
             material: cursed_warden::plugins::items::MaterialType::Steel,
             item_type: cursed_warden::plugins::items::ItemType::Weapon
         }
