@@ -160,6 +160,8 @@ fn test_save_data_creation() {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+            rarity: cursed_warden::plugins::items::ItemRarity::Common,
+            price: 10,
         }
     ));
 
