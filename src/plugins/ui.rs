@@ -33,7 +33,7 @@ fn spawn_hud(mut commands: Commands) {
             // We need PickingBehavior::Ignore.
             ..default()
         },
-        // PickingBehavior::Ignore,
+        PickingBehavior::IGNORE,
         ZIndex(200), // Above everything
     ))
     .with_children(|parent| {
@@ -125,7 +125,7 @@ fn spawn_hud(mut commands: Commands) {
 struct StartCombatButton;
 
 fn update_hud(
-    mut commands: Commands,
+    // Removed unused mut commands
     state: Res<State<GameState>>,
     player_stats: Res<PlayerStats>,
     time: Res<GlobalTime>,

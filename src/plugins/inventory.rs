@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
-use crate::plugins::items::ItemDatabase;
+use crate::plugins::items::{ItemDatabase, ItemDefinition};
+use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
 
 pub struct InventoryPlugin;
@@ -9,7 +10,8 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, consume_pending_items))
+           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
+           .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
            .add_systems(Update, (resize_item_system, debug_spawn_item_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
@@ -117,8 +119,10 @@ fn resize_item_system(
     }
 }
 
-fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridState>) {
-    // Clear any previous state if needed, but ResMut handles current state
+fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGridState>) {
+    // Clear the grid state map, as we are rebuilding the UI and the entities within it.
+    // However, if we are loading from persistent state, we need it empty anyway.
+    grid_state.cells.clear();
 
     // Root Node
     commands
@@ -132,6 +136,7 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                 ..default()
             },
             BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+            InventoryUiRoot,
         ))
         .with_children(|parent| {
             // Inventory Grid Container
@@ -165,17 +170,69 @@ fn spawn_inventory_ui(mut commands: Commands, grid_state: ResMut<InventoryGridSt
                             BorderColor(Color::BLACK),
                             InventorySlot { x, y },
                         ));
-
-                        // We could populate grid_state here if we want to track slots,
-                        // but usually grid_state tracks items.
-                        // However, collision logic needs to know if a slot exists?
-                        // Actually, slots are static. grid_state.cells usually tracks ITEMS occupying cells.
                     }
                 }
-
-                // Initial items are now spawned via systems or debug tools
             });
         });
+}
+
+#[derive(Component)]
+struct InventoryUiRoot;
+
+fn cleanup_inventory_ui(
+    mut commands: Commands,
+    q_root: Query<Entity, With<InventoryUiRoot>>,
+) {
+    for entity in q_root.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
+fn save_inventory_state(
+    mut persistent_inventory: ResMut<PersistentInventory>,
+    q_items: Query<(&ItemDefinition, &GridPosition), With<Item>>,
+) {
+    let mut saved_items = Vec::new();
+    for (def, pos) in q_items.iter() {
+        saved_items.push(SavedItem {
+            item_id: def.id.clone(),
+            grid_x: pos.x,
+            grid_y: pos.y,
+        });
+    }
+    persistent_inventory.items = saved_items;
+    info!("Saved {} items to persistent inventory state", persistent_inventory.items.len());
+}
+
+fn load_inventory_state(
+    mut commands: Commands,
+    persistent_inventory: Res<PersistentInventory>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+) {
+    if let Ok(container) = q_container.get_single() {
+        for saved_item in &persistent_inventory.items {
+            if let Some(def) = item_db.items.get(&saved_item.item_id) {
+                 let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+                 let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+
+                 // Check if space is actually free (sanity check)
+                 if grid_state.is_area_free(pos, size, None) {
+                     spawn_item_entity(
+                         &mut commands,
+                         container,
+                         def,
+                         pos,
+                         size,
+                         &mut grid_state
+                     );
+                 } else {
+                     warn!("Could not restore item {} at {:?}: Space occupied", def.name, pos);
+                 }
+            }
+        }
+    }
 }
 
 fn consume_pending_items(
@@ -192,60 +249,15 @@ fn consume_pending_items(
 
                  // Find free spot
                  if let Some(pos) = grid_state.find_free_spot(size) {
-                     // Calculate UI position
-                     let left = 10.0 + pos.x as f32 * 52.0;
-                     let top = 10.0 + pos.y as f32 * 52.0;
-                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
-                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
-
-                     let item_entity = commands.spawn((
-                        Node {
-                            width: Val::Px(width),
-                            height: Val::Px(height),
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(left),
-                            top: Val::Px(top),
-                            border: UiRect::all(Val::Px(2.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
-                        BorderColor(Color::WHITE),
-                        Interaction::default(),
-                        Item,
-                        GridPosition { x: pos.x, y: pos.y },
-                        size,
-                        def.clone(),
-                    ))
-                    .with_children(|parent| {
-                         parent.spawn((
-                             Text::new(&def.name),
-                             TextFont {
-                                 font_size: 14.0,
-                                 ..default()
-                             },
-                             TextColor(Color::WHITE),
-                             Node {
-                                 position_type: PositionType::Absolute,
-                                 left: Val::Px(2.0),
-                                 top: Val::Px(2.0),
-                                 ..default()
-                             },
-                         ));
-                    })
-                    .observe(handle_drag_start)
-                    .observe(handle_drag)
-                    .observe(handle_drag_drop)
-                    .id();
-
-                    // Add to grid state
-                    for dy in 0..size.height {
-                        for dx in 0..size.width {
-                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
-                        }
-                    }
-
-                    commands.entity(container).add_child(item_entity);
-                    info!("Consumed pending item {} at {:?}", def.name, pos);
+                     spawn_item_entity(
+                         &mut commands,
+                         container,
+                         def,
+                         pos,
+                         size,
+                         &mut grid_state
+                     );
+                     info!("Consumed pending item {} at {:?}", def.name, pos);
                  } else {
                      warn!("No space for pending item {}", def.name);
                  }
@@ -253,7 +265,75 @@ fn consume_pending_items(
                 warn!("Unknown item id: {}", item_key);
             }
         }
+    } else {
+        warn!("Grid container not found during consume_pending_items");
     }
+}
+
+// Helper to spawn item and attach to grid
+fn spawn_item_entity(
+    commands: &mut Commands,
+    container: Entity,
+    def: &ItemDefinition,
+    pos: IVec2,
+    size: ItemSize,
+    grid_state: &mut InventoryGridState,
+) {
+     // Calculate UI position
+     let left = 10.0 + pos.x as f32 * 52.0;
+     let top = 10.0 + pos.y as f32 * 52.0;
+     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
+     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+
+     let item_entity = commands.spawn((
+        Node {
+            width: Val::Px(width),
+            height: Val::Px(height),
+            position_type: PositionType::Absolute,
+            left: Val::Px(left),
+            top: Val::Px(top),
+            border: UiRect::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
+        BorderColor(Color::WHITE),
+        Interaction::default(),
+        Item,
+        GridPosition { x: pos.x, y: pos.y },
+        size,
+        def.clone(),
+    ))
+    .with_children(|parent| {
+         parent.spawn((
+             Text::new(&def.name),
+             TextFont {
+                 font_size: 14.0,
+                 ..default()
+             },
+             TextColor(Color::WHITE),
+             Node {
+                 position_type: PositionType::Absolute,
+                 left: Val::Px(2.0),
+                 top: Val::Px(2.0),
+                 ..default()
+             },
+             PickingBehavior::IGNORE, // Text shouldn't block drag
+         ));
+    })
+    .observe(handle_drag_start)
+    .observe(handle_drag)
+    .observe(handle_drag_drop)
+    .observe(handle_drag_end) // Added DragEnd handler
+    .id();
+
+    // Add to grid state
+    for dy in 0..size.height {
+        for dx in 0..size.width {
+            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
+        }
+    }
+
+    commands.entity(container).add_child(item_entity);
 }
 
 fn debug_spawn_item_system(
@@ -276,64 +356,15 @@ fn debug_spawn_item_system(
 
                  // Find free spot
                  if let Some(pos) = grid_state.find_free_spot(size) {
-                     // Spawn item
-
-                     // Calculate UI position
-                     let left = 10.0 + pos.x as f32 * 52.0;
-                     let top = 10.0 + pos.y as f32 * 52.0;
-                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
-                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
-
-                     let item_entity = commands.spawn((
-                        Node {
-                            width: Val::Px(width),
-                            height: Val::Px(height),
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(left),
-                            top: Val::Px(top),
-                            border: UiRect::all(Val::Px(2.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)), // Default color for spawned items
-                        BorderColor(Color::WHITE),
-                        Interaction::default(),
-                        Item,
-                        GridPosition { x: pos.x, y: pos.y },
-                        size,
-                        def.clone(), // Attach the definition
-                    ))
-                    .with_children(|parent| {
-                         parent.spawn((
-                             Text::new(&def.name),
-                             TextFont {
-                                 font_size: 14.0,
-                                 ..default()
-                             },
-                             TextColor(Color::WHITE),
-                             Node {
-                                 position_type: PositionType::Absolute,
-                                 left: Val::Px(2.0),
-                                 top: Val::Px(2.0),
-                                 ..default()
-                             },
-                         ));
-                    })
-                    .observe(handle_drag_start)
-                    .observe(handle_drag)
-                    .observe(handle_drag_drop)
-                    .id();
-
-                    // Add to grid state
-                    for dy in 0..size.height {
-                        for dx in 0..size.width {
-                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
-                        }
-                    }
-
-                    // Attach to container
-                    commands.entity(container).add_child(item_entity);
-
-                    info!("Spawned item {} at {:?}", def.name, pos);
+                     spawn_item_entity(
+                         &mut commands,
+                         container,
+                         def,
+                         pos,
+                         size,
+                         &mut grid_state
+                     );
+                     info!("Spawned item {} at {:?}", def.name, pos);
                  } else {
                      warn!("No space for item {}", def.name);
                  }
@@ -352,7 +383,8 @@ fn attach_drag_observers(
     commands.entity(entity)
         .observe(handle_drag_start)
         .observe(handle_drag)
-        .observe(handle_drag_drop);
+        .observe(handle_drag_drop)
+        .observe(handle_drag_end);
 }
 
 // Drag Handlers
@@ -372,6 +404,12 @@ fn handle_drag_start(
 
         // Bring to front (ZIndex(100))
         *z_index = ZIndex(100);
+
+        // Allow raycast to pass through to find drop target (Slot)
+        commands.entity(entity).insert(PickingBehavior {
+            should_block_lower: false,
+            ..default()
+        });
     }
 }
 
@@ -390,6 +428,16 @@ fn handle_drag(
             node.top = Val::Px(current_top + event.delta.y);
         }
     }
+}
+
+// Ensure picking behavior is reset if drag ends (e.g. cancelled or dropped)
+fn handle_drag_end(
+    trigger: Trigger<Pointer<DragEnd>>,
+    mut commands: Commands,
+) {
+    let entity = trigger.entity();
+    // Re-enable blocking so we can drag it again later
+    commands.entity(entity).remove::<PickingBehavior>();
 }
 
 fn handle_drag_drop(
