@@ -107,8 +107,8 @@ fn spawn_city_ui(mut commands: Commands) {
         ));
 
         let buttons = [
-            ("Visit Market (Sword)", "sword_basic"),
-            ("Visit Slums (Dagger)", "dagger_rusty"),
+            ("Visit Market (Sword)", "steel_sword"),
+            ("Visit Slums (Dagger)", "silver_dagger"),
             ("Go to Inventory", "NEXT_PHASE"),
         ];
 
@@ -305,6 +305,7 @@ fn load_system_debug(
                                         },
                                         BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
                                         BorderColor(Color::WHITE),
+                                        Interaction::default(),
                                         Item,
                                         GridPosition { x: pos.x, y: pos.y },
                                         size,
