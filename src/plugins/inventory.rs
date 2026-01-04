@@ -210,6 +210,7 @@ fn consume_pending_items(
                         },
                         BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
                         BorderColor(Color::WHITE),
+                        Interaction::default(),
                         Item,
                         GridPosition { x: pos.x, y: pos.y },
                         size,
@@ -295,6 +296,7 @@ fn debug_spawn_item_system(
                         },
                         BackgroundColor(Color::srgb(0.5, 0.5, 0.8)), // Default color for spawned items
                         BorderColor(Color::WHITE),
+                        Interaction::default(),
                         Item,
                         GridPosition { x: pos.x, y: pos.y },
                         size,

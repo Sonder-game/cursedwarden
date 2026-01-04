@@ -13,6 +13,7 @@ impl Plugin for CombatPlugin {
             .register_type::<UnitType>()
             .register_type::<Team>()
             .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
+            .add_systems(OnExit(crate::plugins::core::GameState::NightPhase), cleanup_combat_ui)
             .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
             .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
     }
@@ -24,6 +25,12 @@ pub struct CombatLog;
 
 #[derive(Component)]
 pub struct CombatUnitUi;
+
+fn cleanup_combat_ui(mut commands: Commands, q_root: Query<Entity, With<CombatUnitUi>>) {
+    for e in q_root.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+}
 
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
