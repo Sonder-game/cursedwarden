@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Resource, Default)]
 pub struct ItemDatabase {
     pub items: HashMap<String, ItemDefinition>,
+    pub recipes: Vec<RecipeDefinition>,
 }
 
 #[derive(Debug, Clone, Deserialize, Component)]
@@ -41,6 +42,18 @@ pub struct ItemDefinition {
     pub speed: f32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecipeDefinition {
+    pub result_item_id: String,
+    pub ingredients: Vec<RecipeIngredient>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RecipeIngredient {
+    pub item_id: String,
+    pub is_catalyst: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash, PartialOrd, Ord)]
 pub enum ItemRarity {
     Common,
@@ -64,6 +77,8 @@ pub enum ItemTag {
     Food,
     Magic,
     Valuable,
+    Armor,
+    Accessory,
     // Add more as needed
 }
 
@@ -105,6 +120,9 @@ pub enum MaterialType {
     Steel,
     Silver,
     Flesh,
+    Wood,
+    Crystal,
+    Fabric,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -113,6 +131,8 @@ pub enum ItemType {
     Weapon,
     Consumable,
     Ammo,
+    Armor,
+    Accessory,
     // Add others as needed
 }
 
@@ -131,6 +151,18 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
 
     let mut items = vec![
         ItemDefinition {
+            id: "wooden_sword".to_string(),
+            name: "Wooden Sword".to_string(),
+            width: 1, height: 2, shape: vec![],
+            material: MaterialType::Wood,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Common,
+            price: 3,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 4.0, defense: 0.0, speed: 0.0,
+        },
+        ItemDefinition {
             id: "steel_sword".to_string(),
             name: "Steel Sword".to_string(),
             width: 1,
@@ -145,6 +177,30 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+        },
+        ItemDefinition {
+            id: "hero_sword".to_string(),
+            name: "Hero Sword".to_string(),
+            width: 1, height: 2, shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Rare,
+            price: 15,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 18.0, defense: 0.0, speed: 10.0,
+        },
+        ItemDefinition {
+            id: "hero_longsword".to_string(),
+            name: "Hero Longsword".to_string(),
+            width: 1, height: 3, shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Epic,
+            price: 30,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 30.0, defense: 0.0, speed: 15.0,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -191,22 +247,22 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             tags: vec![ItemTag::Valuable],
             synergies: vec![
                 SynergyDefinition {
-                    offset: IVec2::new(1, 0), // Right
+                    offset: IVec2::new(1, 0),
                     target_tags: vec![ItemTag::Weapon],
                     effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
                 },
                 SynergyDefinition {
-                    offset: IVec2::new(-1, 0), // Left
+                    offset: IVec2::new(-1, 0),
                     target_tags: vec![ItemTag::Weapon],
                     effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
                 },
                 SynergyDefinition {
-                    offset: IVec2::new(0, 1), // Top
+                    offset: IVec2::new(0, 1),
                     target_tags: vec![ItemTag::Weapon],
                     effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
                 },
                 SynergyDefinition {
-                    offset: IVec2::new(0, -1), // Bottom
+                    offset: IVec2::new(0, -1),
                     target_tags: vec![ItemTag::Weapon],
                     effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
                 }
@@ -214,6 +270,43 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+        },
+        // Armor and Catalyst
+        ItemDefinition {
+            id: "leather_armor".to_string(),
+            name: "Leather Armor".to_string(),
+            width: 2, height: 2, shape: vec![],
+            material: MaterialType::Fabric,
+            item_type: ItemType::Armor,
+            rarity: ItemRarity::Common,
+            price: 8,
+            tags: vec![ItemTag::Armor],
+            synergies: vec![],
+            attack: 0.0, defense: 25.0, speed: 0.0,
+        },
+        ItemDefinition {
+            id: "blood_amulet".to_string(),
+            name: "Blood Amulet".to_string(),
+            width: 1, height: 1, shape: vec![],
+            material: MaterialType::Crystal,
+            item_type: ItemType::Accessory,
+            rarity: ItemRarity::Rare,
+            price: 15,
+            tags: vec![ItemTag::Valuable, ItemTag::Accessory],
+            synergies: vec![],
+            attack: 0.0, defense: 0.0, speed: 0.0,
+        },
+        ItemDefinition {
+            id: "vampiric_armor".to_string(),
+            name: "Vampiric Armor".to_string(),
+            width: 2, height: 2, shape: vec![],
+            material: MaterialType::Flesh,
+            item_type: ItemType::Armor,
+            rarity: ItemRarity::Epic,
+            price: 40,
+            tags: vec![ItemTag::Armor],
+            synergies: vec![],
+            attack: 0.0, defense: 40.0, speed: 0.0,
         },
         // Adding more items to test rarity
         ItemDefinition {
@@ -281,5 +374,31 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
         item_db.items.insert(item.id.clone(), item);
     }
 
-    info!("ItemDatabase loaded with {} items.", item_db.items.len());
+    // Populate Recipes
+    item_db.recipes = vec![
+        RecipeDefinition {
+            result_item_id: "hero_sword".to_string(),
+            ingredients: vec![
+                RecipeIngredient { item_id: "wooden_sword".to_string(), is_catalyst: false },
+                RecipeIngredient { item_id: "whetstone".to_string(), is_catalyst: false },
+            ],
+        },
+        RecipeDefinition {
+            result_item_id: "hero_longsword".to_string(),
+            ingredients: vec![
+                RecipeIngredient { item_id: "hero_sword".to_string(), is_catalyst: false },
+                RecipeIngredient { item_id: "whetstone".to_string(), is_catalyst: false },
+                RecipeIngredient { item_id: "whetstone".to_string(), is_catalyst: false },
+            ],
+        },
+        RecipeDefinition {
+            result_item_id: "vampiric_armor".to_string(),
+            ingredients: vec![
+                RecipeIngredient { item_id: "leather_armor".to_string(), is_catalyst: false },
+                RecipeIngredient { item_id: "blood_amulet".to_string(), is_catalyst: true },
+            ],
+        },
+    ];
+
+    info!("ItemDatabase loaded with {} items and {} recipes.", item_db.items.len(), item_db.recipes.len());
 }
