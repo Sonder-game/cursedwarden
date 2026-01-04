@@ -102,7 +102,52 @@ impl Default for InventoryGridState {
     }
 }
 
+pub struct SimulatedItem {
+    pub entity_id: Entity,
+    pub def: ItemDefinition,
+    pub grid_pos: GridPosition,
+    pub rotation: ItemRotation,
+}
+
 impl InventoryGridState {
+    // Helper to reconstruct grid from persistence for offline calculations
+    pub fn from_persistent(
+        inventory: &PersistentInventory,
+        item_db: &ItemDatabase,
+    ) -> (Self, Vec<SimulatedItem>) {
+        let mut state = Self::default();
+        let mut simulated_items = Vec::new();
+
+        for (i, saved_item) in inventory.items.iter().enumerate() {
+            if let Some(def) = item_db.items.get(&saved_item.item_id) {
+                let entity_id = Entity::from_raw(i as u32); // Pseudo-entity
+                let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+                let rot = saved_item.rotation;
+
+                // Create simulation wrapper
+                simulated_items.push(SimulatedItem {
+                    entity_id,
+                    def: def.clone(),
+                    grid_pos: GridPosition { x: pos.x, y: pos.y },
+                    rotation: ItemRotation { value: rot },
+                });
+
+                // Populate grid
+                let rotated_shape = Self::get_rotated_shape(&def.shape, rot);
+                for offset in rotated_shape {
+                    let cell_pos = pos + offset;
+                    // Note: We blindly overwrite here, assuming persistence is valid
+                    // In a real scenario, we might want to check bounds again
+                     if let Some(cell) = state.grid.get_mut(&cell_pos) {
+                         cell.state = CellState::Occupied(entity_id);
+                     }
+                }
+            }
+        }
+
+        (state, simulated_items)
+    }
+
     // Helper to rotate a shape
     pub fn get_rotated_shape(shape: &Vec<IVec2>, rotation_step: u8) -> Vec<IVec2> {
         let steps = rotation_step % 4;
@@ -188,6 +233,64 @@ pub struct CombatStats {
     pub defense: f32,
     pub speed: f32,
     pub health: f32,
+    pub combat_entities: Vec<CombatEntitySnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CombatEntitySnapshot {
+    pub item_id: String,
+    pub final_stats: HashMap<StatType, f32>,
+    pub cooldown: f32,
+    pub stamina_cost: f32,
+    pub accuracy: f32,
+}
+
+// Helper to calculate active synergies "offline" (without ECS queries)
+pub fn calculate_active_synergies(
+    grid_state: &InventoryGridState,
+    items: &Vec<SimulatedItem>,
+) -> HashMap<Entity, Vec<(StatType, f32)>> {
+    let mut pending_bonuses: HashMap<Entity, Vec<(StatType, f32)>> = HashMap::new();
+
+    // Create a quick lookup for item definitions by entity
+    let item_lookup: HashMap<Entity, &ItemDefinition> = items.iter().map(|it| (it.entity_id, &it.def)).collect();
+
+    for item in items {
+        if item.def.synergies.is_empty() { continue; }
+
+        for synergy in &item.def.synergies {
+             // Rotate offset
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], item.rotation.value);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0];
+
+             let target_pos = IVec2::new(item.grid_pos.x, item.grid_pos.y) + rotated_offset;
+
+             // Check grid
+             if let Some(cell) = grid_state.grid.get(&target_pos) {
+                 if let CellState::Occupied(target_entity) = cell.state {
+                      // Check target tags
+                      if let Some(target_def) = item_lookup.get(&target_entity) {
+                          // Check if target has ANY required tag
+                          let has_tag = synergy.target_tags.iter().any(|req| target_def.tags.contains(req));
+
+                          if has_tag {
+                              match synergy.effect {
+                                  SynergyEffect::BuffTarget { stat, value } => {
+                                      pending_bonuses.entry(target_entity).or_default().push((stat, value));
+                                  },
+                                  SynergyEffect::BuffSelf { stat, value } => {
+                                      pending_bonuses.entry(item.entity_id).or_default().push((stat, value));
+                                  }
+                              }
+                          }
+                      }
+                 }
+             }
+        }
+    }
+
+    pending_bonuses
 }
 
 pub fn calculate_combat_stats(
@@ -199,20 +302,52 @@ pub fn calculate_combat_stats(
         defense: 0.0,
         speed: 0.0,
         health: 0.0,
+        combat_entities: Vec::new(),
     };
 
-    // Note: This logic duplicates synergy calculation a bit because we don't persist ActiveSynergies properly.
-    // In a real implementation, we should run the synergy logic on the persistent data or simulate the grid.
-    // For now, we just sum base stats.
-    // TODO: Implement synergy calculation for combat snapshot
+    // 1. Reconstruct Grid State
+    let (grid_state, simulated_items) = InventoryGridState::from_persistent(inventory, item_db);
 
-    for saved_item in &inventory.items {
-        if let Some(def) = item_db.items.get(&saved_item.item_id) {
-            stats.attack += def.attack;
-            stats.defense += def.defense;
-            stats.speed += def.speed;
-            // stats.health += def.health; // if we had health on items
+    // 2. Calculate Synergies
+    let active_bonuses = calculate_active_synergies(&grid_state, &simulated_items);
+
+    // 3. Aggregate Stats
+    for item in &simulated_items {
+        let mut item_attack = item.def.attack;
+        let mut item_defense = item.def.defense;
+        let mut item_speed = item.def.speed;
+
+        // Apply bonuses
+        if let Some(bonuses) = active_bonuses.get(&item.entity_id) {
+            for (stat, val) in bonuses {
+                match stat {
+                    StatType::Attack => item_attack += val,
+                    StatType::Defense => item_defense += val,
+                    StatType::Speed => item_speed += val,
+                    _ => {}
+                }
+            }
         }
+
+        // Aggregate to global stats
+        stats.attack += item_attack;
+        stats.defense += item_defense;
+        stats.speed += item_speed;
+        // stats.health += item.def.health;
+
+        // Create snapshot for BattleBridge
+        let mut final_stats = HashMap::new();
+        final_stats.insert(StatType::Attack, item_attack);
+        final_stats.insert(StatType::Defense, item_defense);
+        final_stats.insert(StatType::Speed, item_speed);
+
+        stats.combat_entities.push(CombatEntitySnapshot {
+            item_id: item.def.id.clone(),
+            final_stats,
+            cooldown: (10.0 - item_speed).max(1.0), // Placeholder cooldown formula
+            stamina_cost: 1.0, // Placeholder
+            accuracy: 100.0, // Placeholder
+        });
     }
 
     stats
@@ -806,10 +941,16 @@ mod tests {
         item_db.items.insert("whetstone".to_string(), whetstone);
 
         let mut inv = PersistentInventory::default();
-        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 0, grid_y: 0, rotation: 0 });
-        inv.items.push(SavedItem { item_id: "sword".to_string(), grid_x: 1, grid_y: 0, rotation: 0 });
+        // Note: Coordinates must be within the default grid range (x: 1..7, y: 2..6)
+        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 1, grid_y: 2, rotation: 0 });
+        inv.items.push(SavedItem { item_id: "sword".to_string(), grid_x: 2, grid_y: 2, rotation: 0 });
 
         let stats = calculate_combat_stats(&inv, &item_db);
-        assert_eq!(stats.attack, 10.0); // Assuming no synergy logic in calculate_combat_stats yet
+        // Base 10 + 5 from Whetstone synergy
+        assert_eq!(stats.attack, 15.0);
+
+        // Also verify the combat entities snapshot
+        let sword_entity = stats.combat_entities.iter().find(|e| e.item_id == "sword").unwrap();
+        assert_eq!(sword_entity.final_stats.get(&StatType::Attack), Some(&15.0));
     }
 }

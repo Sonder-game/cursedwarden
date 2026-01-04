@@ -100,7 +100,7 @@ pub enum SynergyEffect {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash)]
 pub enum StatType {
     Attack,
     Defense,
