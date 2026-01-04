@@ -233,6 +233,8 @@ pub struct CombatStats {
     pub defense: f32,
     pub speed: f32,
     pub health: f32,
+    pub stamina: f32,
+    pub stamina_cost: f32,
     pub combat_entities: Vec<CombatEntitySnapshot>,
 }
 
@@ -243,6 +245,13 @@ pub struct CombatEntitySnapshot {
     pub cooldown: f32,
     pub stamina_cost: f32,
     pub accuracy: f32,
+    pub block: f32,
+    pub spikes: f32,
+    pub vampirism: f32,
+    pub empower: f32,
+    pub heat: f32,
+    pub cold: f32,
+    pub blind: f32,
 }
 
 // Helper to calculate active synergies "offline" (without ECS queries)
@@ -313,40 +322,63 @@ pub fn calculate_combat_stats(
 
     // 3. Aggregate Stats
     for item in &simulated_items {
-        let mut item_attack = item.def.attack;
-        let mut item_defense = item.def.defense;
-        let mut item_speed = item.def.speed;
+        // Collect base stats from definition
+        let mut final_values: HashMap<StatType, f32> = HashMap::new();
+
+        // Helper to init or add
+        let mut add_stat = |stat: StatType, val: f32| {
+            *final_values.entry(stat).or_default() += val;
+        };
+
+        add_stat(StatType::Attack, item.def.attack);
+        add_stat(StatType::Defense, item.def.defense);
+        add_stat(StatType::Speed, item.def.speed);
+        add_stat(StatType::Health, item.def.health);
+        add_stat(StatType::Stamina, item.def.stamina);
+        add_stat(StatType::StaminaCost, item.def.stamina_cost);
+        add_stat(StatType::Accuracy, item.def.accuracy);
+        add_stat(StatType::Block, item.def.block);
+        add_stat(StatType::Spikes, item.def.spikes);
+        add_stat(StatType::Vampirism, item.def.vampirism);
+        add_stat(StatType::Empower, item.def.empower);
+        add_stat(StatType::Heat, item.def.heat);
+        add_stat(StatType::Cold, item.def.cold);
+        add_stat(StatType::Blind, item.def.blind);
 
         // Apply bonuses
         if let Some(bonuses) = active_bonuses.get(&item.entity_id) {
             for (stat, val) in bonuses {
-                match stat {
-                    StatType::Attack => item_attack += val,
-                    StatType::Defense => item_defense += val,
-                    StatType::Speed => item_speed += val,
-                    _ => {}
-                }
+                add_stat(*stat, *val);
             }
         }
 
-        // Aggregate to global stats
-        stats.attack += item_attack;
-        stats.defense += item_defense;
-        stats.speed += item_speed;
-        // stats.health += item.def.health;
+        // Aggregate to global stats (for player stats that are sums of items)
+        stats.attack += final_values.get(&StatType::Attack).unwrap_or(&0.0);
+        stats.defense += final_values.get(&StatType::Defense).unwrap_or(&0.0);
+        stats.speed += final_values.get(&StatType::Speed).unwrap_or(&0.0);
+        stats.health += final_values.get(&StatType::Health).unwrap_or(&0.0);
+        stats.stamina += final_values.get(&StatType::Stamina).unwrap_or(&0.0);
+        // Take the maximum stamina cost of any item, or sum? Let's use max for now as a "Heavy Weapon" dictates pace
+        let cost = *final_values.get(&StatType::StaminaCost).unwrap_or(&0.0);
+        if cost > stats.stamina_cost {
+            stats.stamina_cost = cost;
+        }
 
-        // Create snapshot for BattleBridge
-        let mut final_stats = HashMap::new();
-        final_stats.insert(StatType::Attack, item_attack);
-        final_stats.insert(StatType::Defense, item_defense);
-        final_stats.insert(StatType::Speed, item_speed);
+        let speed_val = *final_values.get(&StatType::Speed).unwrap_or(&0.0);
 
         stats.combat_entities.push(CombatEntitySnapshot {
             item_id: item.def.id.clone(),
-            final_stats,
-            cooldown: (10.0 - item_speed).max(1.0), // Placeholder cooldown formula
-            stamina_cost: 1.0, // Placeholder
-            accuracy: 100.0, // Placeholder
+            final_stats: final_values.clone(),
+            cooldown: (10.0 - speed_val).max(1.0),
+            stamina_cost: *final_values.get(&StatType::StaminaCost).unwrap_or(&1.0).max(&1.0),
+            accuracy: *final_values.get(&StatType::Accuracy).unwrap_or(&0.0), // Base accuracy usually handled by combat logic, this is bonus
+            block: *final_values.get(&StatType::Block).unwrap_or(&0.0),
+            spikes: *final_values.get(&StatType::Spikes).unwrap_or(&0.0),
+            vampirism: *final_values.get(&StatType::Vampirism).unwrap_or(&0.0),
+            empower: *final_values.get(&StatType::Empower).unwrap_or(&0.0),
+            heat: *final_values.get(&StatType::Heat).unwrap_or(&0.0),
+            cold: *final_values.get(&StatType::Cold).unwrap_or(&0.0),
+            blind: *final_values.get(&StatType::Blind).unwrap_or(&0.0),
         });
     }
 

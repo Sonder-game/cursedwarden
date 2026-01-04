@@ -16,7 +16,7 @@ pub struct RecipeDefinition {
     pub catalysts: Vec<String>, // Item IDs that are required but not consumed
 }
 
-#[derive(Debug, Clone, Deserialize, Component)]
+#[derive(Debug, Clone, Deserialize, Component, Default)]
 pub struct ItemDefinition {
     pub id: String,
     pub name: String,
@@ -48,6 +48,30 @@ pub struct ItemDefinition {
     pub defense: f32,
     #[serde(default)]
     pub speed: f32,
+
+    // Extended Stats
+    #[serde(default)]
+    pub health: f32,
+    #[serde(default)]
+    pub stamina: f32,
+    #[serde(default)]
+    pub stamina_cost: f32,
+    #[serde(default)]
+    pub accuracy: f32,
+    #[serde(default)]
+    pub block: f32,
+    #[serde(default)]
+    pub spikes: f32,
+    #[serde(default)]
+    pub vampirism: f32,
+    #[serde(default)]
+    pub empower: f32,
+    #[serde(default)]
+    pub heat: f32,
+    #[serde(default)]
+    pub cold: f32,
+    #[serde(default)]
+    pub blind: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash, PartialOrd, Ord)]
@@ -106,6 +130,16 @@ pub enum StatType {
     Defense,
     Speed,
     Health,
+    Stamina,
+    StaminaCost,
+    Accuracy,
+    Block,
+    Spikes,
+    Vampirism,
+    Empower,
+    Heat,
+    Cold,
+    Blind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -154,6 +188,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+            ..default()
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -170,6 +205,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 8.0,
             defense: 0.0,
             speed: 5.0,
+            ..default()
         },
         ItemDefinition {
             id: "health_potion".to_string(),
@@ -186,6 +222,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            ..default()
         },
         ItemDefinition {
             id: "whetstone".to_string(),
@@ -223,6 +260,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            ..default()
         },
         // Adding more items to test rarity
         ItemDefinition {
@@ -240,6 +278,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 2.0,
             defense: 20.0,
             speed: -2.0,
+            block: 15.0,
+            ..default()
         },
         ItemDefinition {
             id: "legendary_bow".to_string(),
@@ -256,6 +296,8 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 15.0,
             defense: 0.0,
             speed: 10.0,
+            accuracy: 20.0,
+            ..default()
         },
         ItemDefinition {
              id: "unique_charm".to_string(),
@@ -272,6 +314,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
              attack: 0.0,
              defense: 0.0,
              speed: 0.0,
+             ..default()
         },
     ];
 
