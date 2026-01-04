@@ -14,7 +14,7 @@ impl Plugin for CombatPlugin {
             .register_type::<Team>()
             .add_systems(OnEnter(crate::plugins::core::GameState::NightPhase), spawn_combat_arena)
             .add_systems(OnExit(crate::plugins::core::GameState::NightPhase), cleanup_combat_ui)
-            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
+            .add_systems(FixedUpdate, (tick_timer_system, combat_turn_system, fatigue_system).chain().run_if(in_state(crate::plugins::core::GameState::NightPhase)))
             .add_systems(Update, update_combat_ui.run_if(in_state(crate::plugins::core::GameState::NightPhase)));
     }
 }
@@ -94,9 +94,16 @@ fn spawn_combat_arena(
         })
         .insert((
             Health { current: final_hp, max: final_hp },
+            Stamina { current: stats.stamina.max(10.0), max: stats.stamina.max(10.0), regen: 1.0 },
+            StaminaCost { value: stats.stamina_cost.max(5.0) },
             Attack { value: stats.attack.max(1.0) },
             Defense { value: stats.defense },
             Speed { value: stats.speed.max(5.0) },
+            Accuracy { value: 0.0 }, // Base accuracy handled in logic
+            Block { value: 0.0 },
+            Spikes { value: 0.0 },
+            Vampirism { value: 0.0 },
+            StatusEffects::default(),
             ActionMeter::default(),
             UnitType::Human,
             MaterialType::Steel,
@@ -134,9 +141,16 @@ fn spawn_combat_arena(
         })
         .insert((
             Health { current: 150.0, max: 150.0 },
+            Stamina { current: 50.0, max: 50.0, regen: 2.0 },
+            StaminaCost { value: 5.0 },
             Attack { value: 15.0 },
             Defense { value: 2.0 },
             Speed { value: 10.0 },
+            Accuracy { value: 0.0 },
+            Block { value: 0.0 },
+            Spikes { value: 0.0 },
+            Vampirism { value: 0.0 },
+            StatusEffects::default(),
             ActionMeter::default(),
             UnitType::Monster,
             MaterialType::Flesh,
@@ -146,10 +160,10 @@ fn spawn_combat_arena(
 }
 
 fn update_combat_ui(
-    q_units: Query<(&Health, &UnitType, &ActionMeter, &Children)>,
+    q_units: Query<(&Health, &UnitType, &ActionMeter, &Stamina, &Children)>,
     mut q_text: Query<&mut Text>,
 ) {
-    for (health, unit_type, meter, children) in q_units.iter() {
+    for (health, unit_type, meter, stamina, children) in q_units.iter() {
         for &child in children.iter() {
             if let Ok(mut text) = q_text.get_mut(child) {
                 let type_name = match unit_type {
@@ -158,10 +172,11 @@ fn update_combat_ui(
                     UnitType::Ethereal => "Ethereal",
                 };
                 **text = format!(
-                    "{}\nHP: {:.0}/{:.0}\nMeter: {:.0}%",
+                    "{}\nHP: {:.0}/{:.0}\nStamina: {:.0}\nMeter: {:.0}%",
                     type_name,
                     health.current,
                     health.max,
+                    stamina.current,
                     (meter.value / meter.threshold * 100.0).clamp(0.0, 100.0)
                 );
             }
@@ -192,6 +207,48 @@ pub struct Defense {
 #[reflect(Component)]
 pub struct Speed {
     pub value: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Accuracy {
+    pub value: f32, // Bonus accuracy
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Block {
+    pub value: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Spikes {
+    pub value: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Vampirism {
+    pub value: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Stamina {
+    pub current: f32,
+    pub max: f32,
+    pub regen: f32,
+}
+
+#[derive(Component, Reflect, Default, Debug, Clone)]
+#[reflect(Component)]
+pub struct StatusEffects {
+    // Map of Effect Type -> Stacks
+    // Simplified for now: just basic counters
+    pub heat: u32,
+    pub cold: u32,
+    pub blind: u32,
 }
 
 #[derive(Component, Reflect, Debug, Clone, Copy)]
@@ -272,64 +329,156 @@ pub fn tick_timer_system(mut query: Query<(&Speed, &mut ActionMeter)>) {
     }
 }
 
+// Fatigue System: Deals damage after 30 seconds
+#[derive(Resource)]
+pub struct BattleTimer(pub Timer);
+
+impl Default for BattleTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(30.0, TimerMode::Once))
+    }
+}
+
+pub fn fatigue_system(
+    time: Res<Time>,
+    mut timer: Local<BattleTimer>,
+    mut q_health: Query<(&mut Health, &Team)>,
+) {
+    // If timer is finished, it means we are in fatigue phase
+    if timer.0.tick(time.delta()).finished() {
+         // Ramp up logic: Use elapsed time since finished?
+         // For simplicity, just use constant damage but higher
+         for (mut health, _) in q_health.iter_mut() {
+             // 0.2 damage per tick (approx 12 dps)
+             health.current -= 0.2;
+         }
+    }
+}
+
+// Full Combat Loop
 pub fn combat_turn_system(
     mut commands: Commands,
-    mut q_units: Query<(Entity, &mut ActionMeter, &Attack, &Defense, &mut Health, &Team, &MaterialType, &UnitType)>,
+    mut q_units: Query<(
+        Entity,
+        &mut ActionMeter,
+        &Attack,
+        &Defense,
+        &mut Health,
+        &Team,
+        &MaterialType,
+        &UnitType,
+        &mut Stamina,
+        &StaminaCost,
+        &Accuracy,
+        &Block,
+        &Spikes,
+        &Vampirism,
+        &StatusEffects
+    )>,
     mut next_state: ResMut<NextState<crate::plugins::core::GameState>>,
 ) {
-    // Collect all potential targets first to avoid borrow checker issues with double iteration
-    let mut ready_units = Vec::new();
-    for (entity, meter, _, _, _, team, _, _) in q_units.iter() {
+    // 1. Identify attackers (threshold met)
+    let mut attackers = Vec::new();
+    for (entity, meter, ..) in q_units.iter() {
         if meter.value >= meter.threshold {
-            ready_units.push((entity, *team));
+            attackers.push(entity);
         }
     }
 
-    for (attacker_entity, attacker_team) in ready_units {
-        let (attacker_damage, attacker_material) =
-            if let Ok((_, mut meter, attack, _, _, _, material, _)) = q_units.get_mut(attacker_entity) {
-                 if meter.value < meter.threshold { continue; }
+    for attacker_entity in attackers {
+        // We need to re-query to get mutable access safely without holding the whole world
+        // But since we are iterating logic, we can try to extract values carefully.
+        // Rust borrowing rules make this tricky with a single Query.
+        // Pattern: Extract attacker data, then find target, then apply to target.
+
+        let (attacker_damage, attacker_material, attacker_team, attacker_acc, attacker_vamp, attacker_blind_stacks) =
+             if let Ok((_, mut meter, attack, _, _, team, material, _, mut stamina, cost, accuracy, _, _, vampirism, effects)) = q_units.get_mut(attacker_entity) {
+                 if meter.value < meter.threshold { continue; } // Already spent?
+
+                 // Stamina Check
+                 let stamina_cost = cost.value;
+                 if stamina.current < stamina_cost {
+                     // Exhausted: Skip turn, reset meter slightly to try again later (or rest)
+                     meter.value = 0.0;
+                     // Recover some stamina instead of attacking
+                     stamina.current += stamina.regen * 5.0;
+                     info!("Unit {:?} is exhausted (Stamina: {:.1})!", attacker_entity, stamina.current);
+                     continue;
+                 }
+
+                 stamina.current -= stamina_cost;
                  meter.value -= meter.threshold;
-                 (attack.value, *material)
+
+                 (attack.value, *material, *team, accuracy.value, vampirism.value, effects.blind)
             } else {
                 continue;
             };
 
-        // Find target
-        let mut target_entity_opt = None;
-        let mut target_defense_val = 0.0;
-        let mut target_unit_type_val = UnitType::Human;
-
-        for (candidate_entity, _, _, defense, health, team, _, unit_type) in q_units.iter() {
+        // Find Target
+        let mut target_data = None;
+        // Simple targeting: First enemy found
+        for (target_entity, _, _, defense, health, team, _, unit_type, _, _, _, block, spikes, _, _) in q_units.iter() {
             if *team != attacker_team && health.current > 0.0 {
-                target_entity_opt = Some(candidate_entity);
-                target_defense_val = defense.value;
-                target_unit_type_val = *unit_type;
+                target_data = Some((target_entity, defense.value, *unit_type, block.value, spikes.value));
                 break;
             }
         }
 
-        if let Some(target_entity) = target_entity_opt {
-             let damage = calculate_damage(attacker_damage, attacker_material, target_unit_type_val, target_defense_val);
+        if let Some((target_entity, target_def, target_type, target_block, target_spikes)) = target_data {
+             // Accuracy Check
+             // Base 100% + Accuracy - (Blind * 10%)
+             let hit_chance = 100.0 + attacker_acc - (attacker_blind_stacks as f32 * 10.0);
+             let roll = rand::thread_rng().gen_range(0.0..100.0);
 
-             info!("Unit {:?} ({:?}) attacks {:?} for {:.1} damage!", attacker_entity, attacker_team, target_entity, damage);
+             if roll > hit_chance {
+                 info!("Unit {:?} missed target {:?} (Chance: {:.1}%)", attacker_entity, target_entity, hit_chance);
+                 continue;
+             }
 
-             if let Ok((_, _, _, _, mut health, _, _, _)) = q_units.get_mut(target_entity) {
-                 health.current -= damage;
-                 if health.current <= 0.0 {
+             // Damage Calculation
+             let raw_damage = calculate_damage(attacker_damage, attacker_material, target_type, target_def);
+
+             // Block Reduction
+             let blocked_damage = (raw_damage - target_block).max(0.0);
+
+             info!("Unit {:?} hits {:?} for {:.1} (Raw: {:.1}, Blocked: {:.1})", attacker_entity, target_entity, blocked_damage, raw_damage, target_block);
+
+             // Apply Damage to Target
+             let mut damage_dealt = 0.0;
+             if let Ok((_, _, _, _, mut t_health, _, _, _, _, _, _, _, _, _)) = q_units.get_mut(target_entity) {
+                 t_health.current -= blocked_damage;
+                 damage_dealt = blocked_damage;
+                 if t_health.current <= 0.0 {
                      info!("Unit {:?} died!", target_entity);
                      commands.entity(target_entity).despawn_recursive();
+                 }
+             }
+
+             // Apply Spikes (Reflect)
+             if target_spikes > 0.0 {
+                 if let Ok((_, _, _, _, mut a_health, _, _, _, _, _, _, _, _, _)) = q_units.get_mut(attacker_entity) {
+                     a_health.current -= target_spikes;
+                     info!("Unit {:?} took {:.1} spike damage!", attacker_entity, target_spikes);
+                 }
+             }
+
+             // Apply Vampirism (Heal)
+             if attacker_vamp > 0.0 && damage_dealt > 0.0 {
+                 let heal = damage_dealt * (attacker_vamp / 100.0);
+                 if let Ok((_, _, _, _, mut a_health, _, _, _, _, _, _, _, _, _)) = q_units.get_mut(attacker_entity) {
+                     a_health.current = (a_health.current + heal).min(a_health.max);
+                     info!("Unit {:?} healed {:.1} from vampirism!", attacker_entity, heal);
                  }
              }
         }
     }
 
-    // Check game over / victory conditions
+    // Check Win Condition
     let mut player_alive = false;
     let mut enemy_alive = false;
 
-    for (_, _, _, _, health, team, _, _) in q_units.iter() {
-        if health.current > 0.0 {
+    for (_, _, _, _, health, team, _, _, _, _, _, _, _, _) in q_units.iter() {
+         if health.current > 0.0 {
             match team {
                 Team::Player => player_alive = true,
                 Team::Enemy => enemy_alive = true,
@@ -338,10 +487,10 @@ pub fn combat_turn_system(
     }
 
     if !player_alive {
-        info!("Player Defeated! Returning to City...");
+        info!("Player Defeated!");
         next_state.set(crate::plugins::core::GameState::DayPhase);
     } else if !enemy_alive {
-        info!("Victory! Returning to City...");
+        info!("Victory!");
         next_state.set(crate::plugins::core::GameState::DayPhase);
     }
 }
