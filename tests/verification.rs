@@ -27,6 +27,12 @@ fn test_inventory_placement_logic() {
         let mut grid_state = app.world_mut().resource_mut::<InventoryGridState>();
         grid_state.width = 5;
         grid_state.height = 5;
+        // Make all cells valid for this test
+        for y in 0..5 {
+            for x in 0..5 {
+                grid_state.valid_cells.insert(IVec2::new(x, y));
+            }
+        }
 
         // Test 1: Place item in empty spot
         let size = ItemSize { width: 2, height: 2 };
@@ -39,6 +45,13 @@ fn test_inventory_placement_logic() {
 
     {
         let mut grid_state = app.world_mut().resource_mut::<InventoryGridState>();
+        // Make sure valid_cells persists or is re-applied if we got a new instance (we didn't, but safe to be sure if logic changes)
+         for y in 0..5 {
+            for x in 0..5 {
+                grid_state.valid_cells.insert(IVec2::new(x, y));
+            }
+        }
+
         for y in 0..2 {
             for x in 0..2 {
                 grid_state.cells.insert(IVec2::new(x, y), item_entity);
