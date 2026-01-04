@@ -6,3 +6,4 @@ pub mod metagame;
 pub mod mutation;
 pub mod ui;
 pub mod shop;
+pub mod visualization;
