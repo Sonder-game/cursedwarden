@@ -48,7 +48,21 @@ pub struct ItemDefinition {
     pub defense: f32,
     #[serde(default)]
     pub speed: f32,
+
+    #[serde(default = "default_cooldown")]
+    pub cooldown: f32,
+    #[serde(default = "default_accuracy")]
+    pub accuracy: f32,
+    #[serde(default)]
+    pub stamina_cost: f32,
+    #[serde(default)]
+    pub crit_chance: f32,
+    #[serde(default)]
+    pub vampirism: f32,
 }
+
+fn default_cooldown() -> f32 { 3.0 }
+fn default_accuracy() -> f32 { 90.0 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash, PartialOrd, Ord)]
 pub enum ItemRarity {
@@ -106,6 +120,11 @@ pub enum StatType {
     Defense,
     Speed,
     Health,
+    Cooldown,
+    Accuracy,
+    StaminaCost,
+    CritChance,
+    Vampirism,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -154,6 +173,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 10.0,
             defense: 0.0,
             speed: 0.0,
+            cooldown: 2.0,
+            accuracy: 90.0,
+            stamina_cost: 1.0,
+            crit_chance: 0.0,
+            vampirism: 0.0,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -170,6 +194,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 8.0,
             defense: 0.0,
             speed: 5.0,
+            cooldown: 1.5,
+            accuracy: 95.0,
+            stamina_cost: 0.8,
+            crit_chance: 0.1,
+            vampirism: 0.0,
         },
         ItemDefinition {
             id: "health_potion".to_string(),
@@ -186,6 +215,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            cooldown: 0.0,
+            accuracy: 100.0,
+            stamina_cost: 0.0,
+            crit_chance: 0.0,
+            vampirism: 0.0,
         },
         ItemDefinition {
             id: "whetstone".to_string(),
@@ -223,6 +257,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
+            cooldown: 0.0,
+            accuracy: 100.0,
+            stamina_cost: 0.0,
+            crit_chance: 0.0,
+            vampirism: 0.0,
         },
         // Adding more items to test rarity
         ItemDefinition {
@@ -240,6 +279,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 2.0,
             defense: 20.0,
             speed: -2.0,
+            cooldown: 0.0,
+            accuracy: 100.0,
+            stamina_cost: 0.0,
+            crit_chance: 0.0,
+            vampirism: 0.0,
         },
         ItemDefinition {
             id: "legendary_bow".to_string(),
@@ -256,6 +300,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             attack: 15.0,
             defense: 0.0,
             speed: 10.0,
+            cooldown: 4.0,
+            accuracy: 85.0,
+            stamina_cost: 2.0,
+            crit_chance: 0.25,
+            vampirism: 0.0,
         },
         ItemDefinition {
              id: "unique_charm".to_string(),
@@ -272,6 +321,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
              attack: 0.0,
              defense: 0.0,
              speed: 0.0,
+             cooldown: 0.0,
+             accuracy: 100.0,
+             stamina_cost: 0.0,
+             crit_chance: 0.0,
+             vampirism: 0.0,
         },
     ];
 

@@ -316,6 +316,11 @@ pub fn calculate_combat_stats(
         let mut item_attack = item.def.attack;
         let mut item_defense = item.def.defense;
         let mut item_speed = item.def.speed;
+        let mut item_accuracy = item.def.accuracy;
+        let mut item_stamina_cost = item.def.stamina_cost;
+        let mut item_crit_chance = item.def.crit_chance;
+        let mut item_vampirism = item.def.vampirism;
+        let mut item_cooldown = item.def.cooldown;
 
         // Apply bonuses
         if let Some(bonuses) = active_bonuses.get(&item.entity_id) {
@@ -324,10 +329,35 @@ pub fn calculate_combat_stats(
                     StatType::Attack => item_attack += val,
                     StatType::Defense => item_defense += val,
                     StatType::Speed => item_speed += val,
+                    StatType::Accuracy => item_accuracy += val,
+                    StatType::StaminaCost => item_stamina_cost += val,
+                    StatType::CritChance => item_crit_chance += val,
+                    StatType::Vampirism => item_vampirism += val,
+                    StatType::Cooldown => {
+                         // Cooldown reduction is usually percentage based in this context or flat?
+                         // The doc says "Most characteristics... are additive".
+                         // But for Cooldown, adding flat seconds might reduce it to 0 or negative.
+                         // Let's assume it's additive reduction (negative value) or we subtract positive value if the effect is defined as "Cooldown Reduction".
+                         // However, typical RPG logic: Cooldown = Base / (1 + Speed/100).
+                         // BUT, here we have explicit Cooldown stat.
+                         // Let's assume the effect value is additive flat seconds for now (e.g., -0.5s).
+                         item_cooldown += val;
+                    },
                     _ => {}
                 }
             }
         }
+
+        // Apply Speed to Cooldown (Haste mechanic)
+        // Formula: New Cooldown = Cooldown / (1.0 + Speed / 100.0)
+        // If speed is 10, factor is 1.1. Cooldown 3.0 -> 2.72.
+        // If speed is negative (Cold), factor is 0.9. Cooldown 3.0 -> 3.33.
+        let speed_factor = (1.0 + item_speed / 100.0).max(0.1); // Prevent div by zero
+        item_cooldown = item_cooldown / speed_factor;
+
+        // Clamp cooldown to sensible minimum
+        item_cooldown = item_cooldown.max(0.1);
+
 
         // Aggregate to global stats
         stats.attack += item_attack;
@@ -340,13 +370,18 @@ pub fn calculate_combat_stats(
         final_stats.insert(StatType::Attack, item_attack);
         final_stats.insert(StatType::Defense, item_defense);
         final_stats.insert(StatType::Speed, item_speed);
+        final_stats.insert(StatType::Accuracy, item_accuracy);
+        final_stats.insert(StatType::StaminaCost, item_stamina_cost);
+        final_stats.insert(StatType::CritChance, item_crit_chance);
+        final_stats.insert(StatType::Vampirism, item_vampirism);
+        final_stats.insert(StatType::Cooldown, item_cooldown);
 
         stats.combat_entities.push(CombatEntitySnapshot {
             item_id: item.def.id.clone(),
             final_stats,
-            cooldown: (10.0 - item_speed).max(1.0), // Placeholder cooldown formula
-            stamina_cost: 1.0, // Placeholder
-            accuracy: 100.0, // Placeholder
+            cooldown: item_cooldown,
+            stamina_cost: item_stamina_cost,
+            accuracy: item_accuracy,
         });
     }
 
