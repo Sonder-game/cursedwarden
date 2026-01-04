@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::plugins::inventory::{InventoryGridState, Item, ItemSize, GridPosition};
+use crate::plugins::inventory::{InventoryGridState, Item, ItemSize, GridPosition, CellState};
 use rand::Rng;
 
 pub fn mutation_system(
@@ -22,31 +22,37 @@ pub fn mutation_system(
 
             // Mutation: Grow in size (e.g., width + 1)
             // We need to check if the new size fits.
+            // But we are using shapes now.
+            // For now, assume growth extends the shape to the right by 1 column for all rows in current shape?
+            // Or just check if there is a slot to the right of the current bounding box?
+            // "Stage 1" just wants grid logic. The mutation logic is legacy/extra.
+            // I'll make a best effort to keep it working with the new system.
+
+            // Check if (x + width, y) is free for all y in 0..height
+            // We'll construct a shape representing the new column.
+            let mut extension_shape = Vec::new();
+            for dy in 0..size.height {
+                 extension_shape.push(IVec2::new(size.width, dy));
+            }
 
             // Check if valid
-            // We temporarily remove the current item from grid to check self-overlap (not needed for growth, but good practice)
-            // But here we are growing to the right.
-            // We need to check if (x + width, y) is free.
-
-            let grow_space_free = (0..size.height).all(|dy| {
-                let check_pos = IVec2::new(pos.x + size.width, pos.y + dy); // The column to the right
-                grid_state.is_area_free(check_pos, ItemSize { width: 1, height: 1 }, Some(entity))
-            });
-
-            if grow_space_free {
+            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.x, pos.y), 0, Some(entity)) {
                  // Update Grid State
-                 for dy in 0..size.height {
-                     let new_cell_pos = IVec2::new(pos.x + size.width, pos.y + dy);
-                     grid_state.cells.insert(new_cell_pos, entity);
+                 for offset in &extension_shape {
+                     let new_cell_pos = IVec2::new(pos.x, pos.y) + *offset;
+                     if let Some(cell) = grid_state.grid.get_mut(&new_cell_pos) {
+                         cell.state = CellState::Occupied(entity);
+                     }
                  }
 
                  // Update Component
                  size.width += 1;
+                 // NOTE: Real implementation should update ItemDefinition.shape too if we want it to persist properly
+                 // But ItemDefinition is shared. We'd need a dynamic ItemShape component.
+                 // For now, this is enough to satisfy the compiler.
                  info!("Item grew to {:?}", *size);
             } else {
                  info!("Item tried to mutate but had no space.");
-                 // GDD says: "Consume neighbor".
-                 // Simplified: If blocked, maybe just change material?
             }
         }
     }

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use cursed_warden::plugins::inventory::{InventoryPlugin, InventoryGridState, Item, ItemSize, GridPosition};
+use cursed_warden::plugins::inventory::{InventoryPlugin, InventoryGridState, Item, ItemSize, GridPosition, Cell, CellState};
 use cursed_warden::plugins::combat::{CombatPlugin, Health, Attack, Defense, Speed, ActionMeter, MaterialType, UnitType, Team};
 use cursed_warden::plugins::metagame::{MetagamePlugin, SaveData, PlayerStats, GlobalTime};
 use cursed_warden::plugins::items::{ItemsPlugin, ItemDefinition};
@@ -27,17 +27,19 @@ fn test_inventory_placement_logic() {
         let mut grid_state = app.world_mut().resource_mut::<InventoryGridState>();
         grid_state.width = 5;
         grid_state.height = 5;
-        // Make all cells valid for this test
+        // Make all cells valid for this test (Free)
+        grid_state.grid.clear();
         for y in 0..5 {
             for x in 0..5 {
-                grid_state.valid_cells.insert(IVec2::new(x, y));
+                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free });
             }
         }
 
         // Test 1: Place item in empty spot
-        let size = ItemSize { width: 2, height: 2 };
+        // Shape for 2x2
+        let shape = vec![IVec2::new(0,0), IVec2::new(1,0), IVec2::new(0,1), IVec2::new(1,1)];
         let pos = IVec2::new(0, 0);
-        assert!(grid_state.is_area_free(pos, size, None));
+        assert!(grid_state.can_place_item(&shape, pos, 0, None));
     } // Drop grid_state ref
 
     // Test 2: Occupy spot and check collision
@@ -45,30 +47,35 @@ fn test_inventory_placement_logic() {
 
     {
         let mut grid_state = app.world_mut().resource_mut::<InventoryGridState>();
-        // Make sure valid_cells persists or is re-applied if we got a new instance (we didn't, but safe to be sure if logic changes)
+        grid_state.width = 5;
+        grid_state.height = 5;
+        // Re-init grid
+        grid_state.grid.clear();
          for y in 0..5 {
             for x in 0..5 {
-                grid_state.valid_cells.insert(IVec2::new(x, y));
+                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free });
             }
         }
 
-        for y in 0..2 {
-            for x in 0..2 {
-                grid_state.cells.insert(IVec2::new(x, y), item_entity);
-            }
+        // Occupy 2x2 at 0,0
+        let shape = vec![IVec2::new(0,0), IVec2::new(1,0), IVec2::new(0,1), IVec2::new(1,1)];
+        for offset in &shape {
+             if let Some(cell) = grid_state.grid.get_mut(offset) {
+                 cell.state = CellState::Occupied(item_entity);
+             }
         }
 
-        let size = ItemSize { width: 2, height: 2 };
         let pos = IVec2::new(0, 0);
 
         // Try to place another item overlapping
-        assert!(!grid_state.is_area_free(pos, size, Some(Entity::PLACEHOLDER))); // Different entity
+        assert!(!grid_state.can_place_item(&shape, pos, 0, Some(Entity::PLACEHOLDER))); // Different entity
 
         // Try to place same item (should be valid to move self)
-        assert!(grid_state.is_area_free(pos, size, Some(item_entity)));
+        assert!(grid_state.can_place_item(&shape, pos, 0, Some(item_entity)));
 
         // Try out of bounds
-        assert!(!grid_state.is_area_free(IVec2::new(4, 4), size, None)); // 4+2 = 6 > 5
+        // 4,4 with 2x2 shape -> (4,4), (5,4), (4,5), (5,5). (5,x) and (x,5) are out of bounds (0..4).
+        assert!(!grid_state.can_place_item(&shape, IVec2::new(4, 4), 0, None));
     }
 }
 
@@ -145,6 +152,7 @@ fn test_save_data_creation() {
             id: "test_sword".to_string(),
             name: "Test".to_string(),
             width: 1, height: 1,
+            shape: vec![IVec2::new(0,0)],
             material: cursed_warden::plugins::items::MaterialType::Steel,
             item_type: cursed_warden::plugins::items::ItemType::Weapon
         }

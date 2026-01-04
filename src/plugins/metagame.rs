@@ -54,7 +54,7 @@ impl Default for GlobalTime {
 
 // Plugin
 use crate::plugins::core::{GameState, DaySubState};
-use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemSize, InventoryGridContainer, ItemSpawnedEvent};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemSize, InventoryGridContainer, ItemSpawnedEvent, CellState, ItemRotation};
 use crate::plugins::items::ItemDatabase;
 use std::fs::File;
 use std::io::{Write, Read};
@@ -282,20 +282,49 @@ fn load_system_debug(
                         for entity in q_items.iter() {
                             commands.entity(entity).despawn_recursive();
                         }
-                        grid_state.cells.clear();
+                        // grid_state.cells.clear();
+                        for cell in grid_state.grid.values_mut() {
+                            cell.state = CellState::Free;
+                        }
 
                         // Respawn items
                         if let Ok(container) = q_container.get_single() {
                             for saved_item in data.inventory {
                                 if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                                     let size = ItemSize { width: def.width as i32, height: def.height as i32 };
+                                     // TODO: Save/Load rotation. Assuming 0 for now.
+                                     let rotation = 0;
+                                     let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
+
+                                     // Recalculate size from shape
+                                     let mut min_x = 0;
+                                     let mut max_x = 0;
+                                     let mut min_y = 0;
+                                     let mut max_y = 0;
+                                     if !rotated_shape.is_empty() {
+                                         min_x = rotated_shape[0].x;
+                                         max_x = rotated_shape[0].x;
+                                         min_y = rotated_shape[0].y;
+                                         max_y = rotated_shape[0].y;
+                                         for p in &rotated_shape {
+                                             if p.x < min_x { min_x = p.x; }
+                                             if p.x > max_x { max_x = p.x; }
+                                             if p.y < min_y { min_y = p.y; }
+                                             if p.y > max_y { max_y = p.y; }
+                                         }
+                                     }
+                                     let width_slots = max_x - min_x + 1;
+                                     let height_slots = max_y - min_y + 1;
+
                                      let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
 
                                      // Visuals
-                                     let left = 10.0 + pos.x as f32 * 52.0;
-                                     let top = 10.0 + pos.y as f32 * 52.0;
-                                     let width = size.width as f32 * 50.0 + (size.width - 1) as f32 * 2.0;
-                                     let height = size.height as f32 * 50.0 + (size.height - 1) as f32 * 2.0;
+                                     let effective_x = pos.x + min_x;
+                                     let effective_y = pos.y + min_y;
+
+                                     let left = 10.0 + effective_x as f32 * 52.0;
+                                     let top = 10.0 + effective_y as f32 * 52.0;
+                                     let width = width_slots as f32 * 50.0 + (width_slots - 1) as f32 * 2.0;
+                                     let height = height_slots as f32 * 50.0 + (height_slots - 1) as f32 * 2.0;
 
                                      let item_entity = commands.spawn((
                                         Node {
@@ -312,7 +341,8 @@ fn load_system_debug(
                                         Interaction::default(),
                                         Item,
                                         GridPosition { x: pos.x, y: pos.y },
-                                        size,
+                                        ItemSize { width: width_slots, height: height_slots },
+                                        ItemRotation { value: rotation },
                                         def.clone(),
                                     ))
                                     .with_children(|parent| {
@@ -337,9 +367,10 @@ fn load_system_debug(
                                     commands.trigger(ItemSpawnedEvent(item_entity));
 
                                     // Add to grid state
-                                    for dy in 0..size.height {
-                                        for dx in 0..size.width {
-                                            grid_state.cells.insert(IVec2::new(pos.x + dx, pos.y + dy), item_entity);
+                                    for offset in rotated_shape {
+                                        let cell_pos = pos + offset;
+                                        if let Some(cell) = grid_state.grid.get_mut(&cell_pos) {
+                                            cell.state = CellState::Occupied(item_entity);
                                         }
                                     }
 
