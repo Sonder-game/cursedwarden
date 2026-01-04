@@ -19,7 +19,62 @@ pub struct ItemDefinition {
     pub material: MaterialType,
     #[allow(dead_code)]
     pub item_type: ItemType,
-    // Add stats later as needed
+
+    #[serde(default)]
+    pub tags: Vec<ItemTag>,
+
+    #[serde(default)]
+    pub synergies: Vec<SynergyDefinition>,
+
+    // Base Stats
+    #[serde(default)]
+    pub attack: f32,
+    #[serde(default)]
+    pub defense: f32,
+    #[serde(default)]
+    pub speed: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Hash)]
+pub enum ItemTag {
+    Weapon,
+    Potion,
+    Food,
+    Magic,
+    Valuable,
+    // Add more as needed
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SynergyDefinition {
+    // Relative coordinate from item pivot (0,0)
+    // Note: This needs to rotate with the item
+    pub offset: IVec2,
+    // If the item at 'offset' has ANY of these tags, the effect triggers
+    pub target_tags: Vec<ItemTag>,
+    pub effect: SynergyEffect,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum SynergyEffect {
+    // Apply stat bonus to the TARGET item
+    BuffTarget {
+        stat: StatType,
+        value: f32,
+    },
+    // Apply stat bonus to SELF if target is found
+    BuffSelf {
+        stat: StatType,
+        value: f32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum StatType {
+    Attack,
+    Defense,
+    Speed,
+    Health,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -61,6 +116,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![], // Will be populated below
             material: MaterialType::Steel,
             item_type: ItemType::Weapon,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 10.0,
+            defense: 0.0,
+            speed: 0.0,
         },
         ItemDefinition {
             id: "silver_dagger".to_string(),
@@ -70,6 +130,11 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![],
             material: MaterialType::Silver,
             item_type: ItemType::Weapon,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 8.0,
+            defense: 0.0,
+            speed: 5.0,
         },
         ItemDefinition {
             id: "health_potion".to_string(),
@@ -79,6 +144,46 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             shape: vec![],
             material: MaterialType::Flesh,
             item_type: ItemType::Consumable,
+            tags: vec![ItemTag::Potion],
+            synergies: vec![],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        },
+        ItemDefinition {
+            id: "whetstone".to_string(),
+            name: "Whetstone".to_string(),
+            width: 1,
+            height: 1,
+            shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Consumable,
+            tags: vec![ItemTag::Valuable],
+            synergies: vec![
+                SynergyDefinition {
+                    offset: IVec2::new(1, 0), // Right
+                    target_tags: vec![ItemTag::Weapon],
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                },
+                SynergyDefinition {
+                    offset: IVec2::new(-1, 0), // Left
+                    target_tags: vec![ItemTag::Weapon],
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                },
+                SynergyDefinition {
+                    offset: IVec2::new(0, 1), // Top
+                    target_tags: vec![ItemTag::Weapon],
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                },
+                SynergyDefinition {
+                    offset: IVec2::new(0, -1), // Bottom
+                    target_tags: vec![ItemTag::Weapon],
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                }
+            ],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
         },
     ];
 

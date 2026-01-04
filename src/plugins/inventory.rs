@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
-use crate::plugins::items::{ItemDatabase, ItemDefinition};
+use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
 
@@ -12,7 +12,7 @@ impl Plugin for InventoryPlugin {
         app.init_resource::<InventoryGridState>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -31,6 +31,11 @@ pub struct InventorySlot {
 
 #[derive(Component)]
 pub struct InventoryGridContainer;
+
+#[derive(Component, Default, Debug)]
+pub struct ActiveSynergies {
+    pub bonuses: Vec<(StatType, f32)>,
+}
 
 #[derive(Component)]
 pub struct Item;
@@ -179,6 +184,76 @@ impl InventoryGridState {
 }
 
 // Systems
+fn visualize_synergy_system(
+    mut q_items: Query<(&ActiveSynergies, &mut BorderColor), Changed<ActiveSynergies>>,
+) {
+    for (active, mut border) in q_items.iter_mut() {
+        if !active.bonuses.is_empty() {
+             *border = BorderColor(Color::srgb(1.0, 0.84, 0.0)); // Gold
+        } else {
+             *border = BorderColor(Color::WHITE);
+        }
+    }
+}
+
+fn synergy_system(
+    mut q_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition, &mut ActiveSynergies)>,
+    grid_state: Res<InventoryGridState>,
+    q_tags: Query<&ItemDefinition>,
+) {
+    // 1. Reset all active synergies
+    for (_, _, _, _, mut active) in q_items.iter_mut() {
+        active.bonuses.clear();
+    }
+
+    let mut pending_bonuses: HashMap<Entity, Vec<(StatType, f32)>> = HashMap::new();
+
+    // Read-only pass to find matches
+    for (entity, pos, rot, def, _) in q_items.iter() {
+        if def.synergies.is_empty() { continue; }
+
+        for synergy in &def.synergies {
+             // Rotate offset
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], rot.value);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0];
+
+             let target_pos = IVec2::new(pos.x, pos.y) + rotated_offset;
+
+             // Check grid
+             if let Some(cell) = grid_state.grid.get(&target_pos) {
+                 if let CellState::Occupied(target_entity) = cell.state {
+                      // Check target tags
+                      if let Ok(target_def) = q_tags.get(target_entity) {
+                          // Check if target has ANY required tag
+                          let has_tag = synergy.target_tags.iter().any(|req| target_def.tags.contains(req));
+
+                          if has_tag {
+                              match synergy.effect {
+                                  SynergyEffect::BuffTarget { stat, value } => {
+                                      pending_bonuses.entry(target_entity).or_default().push((stat, value));
+                                  },
+                                  SynergyEffect::BuffSelf { stat, value } => {
+                                      pending_bonuses.entry(entity).or_default().push((stat, value));
+                                  }
+                              }
+                          }
+                      }
+                 }
+             }
+        }
+    }
+
+    // Write pass
+    for (entity, _, _, _, mut active) in q_items.iter_mut() {
+        if let Some(bonuses) = pending_bonuses.get(&entity) {
+            for (stat, val) in bonuses {
+                active.bonuses.push((*stat, *val));
+            }
+        }
+    }
+}
+
 fn resize_item_system(
     mut q_items: Query<(&mut Node, &ItemSize), Changed<ItemSize>>,
 ) {
@@ -276,14 +351,15 @@ fn cleanup_inventory_ui(
 
 fn save_inventory_state(
     mut persistent_inventory: ResMut<PersistentInventory>,
-    q_items: Query<(&ItemDefinition, &GridPosition), With<Item>>,
+    q_items: Query<(&ItemDefinition, &GridPosition, &ItemRotation), With<Item>>,
 ) {
     let mut saved_items = Vec::new();
-    for (def, pos) in q_items.iter() {
+    for (def, pos, rot) in q_items.iter() {
         saved_items.push(SavedItem {
             item_id: def.id.clone(),
             grid_x: pos.x,
             grid_y: pos.y,
+            rotation: rot.value,
         });
     }
     persistent_inventory.items = saved_items;
@@ -302,13 +378,13 @@ fn load_inventory_state(
             if let Some(def) = item_db.items.get(&saved_item.item_id) {
                  let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
 
-                 if grid_state.can_place_item(&def.shape, pos, 0, None) {
+                 if grid_state.can_place_item(&def.shape, pos, saved_item.rotation, None) {
                      spawn_item_entity(
                          &mut commands,
                          container,
                          def,
                          pos,
-                         0, // Default rotation 0 for now
+                         saved_item.rotation,
                          &mut grid_state
                      );
                  } else {
@@ -391,6 +467,7 @@ fn spawn_item_entity(
         GridPosition { x: pos.x, y: pos.y },
         ItemSize { width: width_slots, height: height_slots },
         ItemRotation { value: rotation },
+        ActiveSynergies::default(),
         def.clone(),
     ))
     .with_children(|parent| {
@@ -646,5 +723,54 @@ fn handle_drag_drop(
              }
         }
         commands.entity(entity).remove::<DragOriginalPosition>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::items::{ItemTag, SynergyDefinition, SynergyEffect, StatType};
+
+    #[test]
+    fn test_synergy_calculation() {
+        let mut item_db = ItemDatabase::default();
+
+        let sword = ItemDefinition {
+            id: "sword".to_string(),
+            name: "Sword".to_string(),
+            width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+            material: crate::plugins::items::MaterialType::Steel,
+            item_type: crate::plugins::items::ItemType::Weapon,
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 10.0, defense: 0.0, speed: 0.0,
+        };
+
+        let whetstone = ItemDefinition {
+            id: "whetstone".to_string(),
+            name: "Stone".to_string(),
+            width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+            material: crate::plugins::items::MaterialType::Steel,
+            item_type: crate::plugins::items::ItemType::Consumable,
+            tags: vec![],
+            synergies: vec![
+                SynergyDefinition {
+                    offset: IVec2::new(1, 0),
+                    target_tags: vec![ItemTag::Weapon],
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                }
+            ],
+            attack: 0.0, defense: 0.0, speed: 0.0,
+        };
+
+        item_db.items.insert("sword".to_string(), sword);
+        item_db.items.insert("whetstone".to_string(), whetstone);
+
+        let mut inv = PersistentInventory::default();
+        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 0, grid_y: 0, rotation: 0 });
+        inv.items.push(SavedItem { item_id: "sword".to_string(), grid_x: 1, grid_y: 0, rotation: 0 });
+
+        let stats = calculate_combat_stats(&inv, &item_db);
+        assert_eq!(stats.attack, 15.0);
     }
 }

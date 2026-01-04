@@ -40,11 +40,20 @@ pub enum Team {
 }
 
 // Systems
-fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<CombatUnitUi>>) {
+fn spawn_combat_arena(
+    mut commands: Commands,
+    q_existing: Query<Entity, With<CombatUnitUi>>,
+    persistent_inventory: Res<crate::plugins::metagame::PersistentInventory>,
+    item_db: Res<crate::plugins::items::ItemDatabase>,
+) {
     // Clean up if re-entering (though ideally we track persistence)
     for e in q_existing.iter() {
         commands.entity(e).despawn_recursive();
     }
+
+    let stats = crate::plugins::inventory::calculate_combat_stats(&persistent_inventory, &item_db);
+    let base_hp = 100.0;
+    let final_hp = base_hp + stats.health;
 
     // Spawn Arena UI Container
     commands.spawn((
@@ -78,16 +87,16 @@ fn spawn_combat_arena(mut commands: Commands, q_existing: Query<Entity, With<Com
         ))
         .with_children(|p| {
              p.spawn((
-                Text::new("Player Unit\nHuman\nHP: 100/100"),
+                Text::new(format!("Player Unit\nHuman\nHP: {:.0}/{:.0}", final_hp, final_hp)),
                 TextFont { font_size: 16.0, ..default() },
                 TextColor(Color::WHITE),
              ));
         })
         .insert((
-            Health { current: 100.0, max: 100.0 },
-            Attack { value: 10.0 },
-            Defense { value: 5.0 },
-            Speed { value: 15.0 },
+            Health { current: final_hp, max: final_hp },
+            Attack { value: stats.attack.max(1.0) },
+            Defense { value: stats.defense },
+            Speed { value: stats.speed.max(5.0) },
             ActionMeter::default(),
             UnitType::Human,
             MaterialType::Steel,
