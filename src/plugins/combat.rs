@@ -43,8 +43,7 @@ pub enum Team {
 fn spawn_combat_arena(
     mut commands: Commands,
     q_existing: Query<Entity, With<CombatUnitUi>>,
-    grid_state: Res<crate::plugins::inventory::InventoryGridState>,
-    q_items: Query<&crate::plugins::inventory::InventoryItem>,
+    persistent_inventory: Res<crate::plugins::metagame::PersistentInventory>,
     item_db: Res<crate::plugins::items::ItemDatabase>,
 ) {
     // Clean up if re-entering (though ideally we track persistence)
@@ -52,32 +51,9 @@ fn spawn_combat_arena(
         commands.entity(e).despawn_recursive();
     }
 
-    // Calculate stats from InventoryGridState (Items inside bags)
-    let mut attack_val: f32 = 0.0;
-    let mut defense_val: f32 = 0.0;
-    let mut speed_val: f32 = 0.0;
-    let mut health_bonus: f32 = 0.0;
-
-    let mut counted_items = Vec::new();
-
-    for slot in grid_state.slots.values() {
-        if let Some(entity) = slot.occupier {
-            if !counted_items.contains(&entity) {
-                if let Ok(inv_item) = q_items.get(entity) {
-                    if let Some(def) = item_db.items.get(&inv_item.item_id) {
-                        attack_val += def.attack;
-                        defense_val += def.defense;
-                        speed_val += def.speed;
-                        // health_bonus += def.health; // Assuming ItemDefinition has health, if not ignore
-                    }
-                }
-                counted_items.push(entity);
-            }
-        }
-    }
-
+    let stats = crate::plugins::inventory::calculate_combat_stats(&persistent_inventory, &item_db);
     let base_hp = 100.0;
-    let final_hp = base_hp + health_bonus;
+    let final_hp = base_hp + stats.health;
 
     // Spawn Arena UI Container
     commands.spawn((
@@ -118,9 +94,9 @@ fn spawn_combat_arena(
         })
         .insert((
             Health { current: final_hp, max: final_hp },
-            Attack { value: attack_val.max(1.0) },
-            Defense { value: defense_val },
-            Speed { value: speed_val.max(5.0) },
+            Attack { value: stats.attack.max(1.0) },
+            Defense { value: stats.defense },
+            Speed { value: stats.speed.max(5.0) },
             ActionMeter::default(),
             UnitType::Human,
             MaterialType::Steel,
