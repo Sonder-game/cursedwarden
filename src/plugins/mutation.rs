@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::plugins::inventory::{InventoryGridState, Item, ItemSize, GridPosition, CellState};
+use crate::plugins::inventory::{InventoryGridState, Item, ItemSize, GridPosition};
 use rand::Rng;
 
 pub fn mutation_system(
@@ -36,12 +36,12 @@ pub fn mutation_system(
             }
 
             // Check if valid
-            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.x, pos.y), 0, Some(entity)) {
+            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.0.x, pos.0.y), 0, Some(entity)) {
                  // Update Grid State
                  for offset in &extension_shape {
-                     let new_cell_pos = IVec2::new(pos.x, pos.y) + *offset;
-                     if let Some(cell) = grid_state.grid.get_mut(&new_cell_pos) {
-                         cell.state = CellState::Occupied(entity);
+                     let new_cell_pos = IVec2::new(pos.0.x, pos.0.y) + *offset;
+                     if let Some(slot) = grid_state.slots.get_mut(&new_cell_pos) {
+                         slot.occupier = Some(entity);
                      }
                  }
 
