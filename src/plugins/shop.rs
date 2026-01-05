@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::Rng;
 use crate::plugins::items::{ItemDatabase, ItemDefinition, ItemRarity};
 use crate::plugins::metagame::{PlayerStats, GlobalTime};
-use crate::plugins::inventory::{InventoryGridState, spawn_item_entity};
+use crate::plugins::inventory::{InventoryGridState, spawn_item_entity, InventoryGridContainer};
 use crate::plugins::core::GameState;
 
 pub struct ShopPlugin;
@@ -469,7 +469,7 @@ fn buy_item_system(
     item_db: Res<ItemDatabase>,
     mut commands: Commands,
     q_root: Query<Entity, With<ShopUiRoot>>,
-    q_container: Query<Entity, With<crate::plugins::inventory::InventoryGridContainer>>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
     _pending_items: ResMut<crate::plugins::metagame::PendingItems>,
 ) {
     for (interaction, buy_btn) in &mut interaction_query {
