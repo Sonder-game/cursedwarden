@@ -41,6 +41,9 @@ pub struct InventorySlot {
 }
 
 #[derive(Component)]
+pub struct SynergyIndicatorContainer;
+
+#[derive(Component)]
 pub struct InventoryGridContainer;
 
 #[derive(Component, Default, Debug)]
@@ -85,6 +88,7 @@ pub enum CellState {
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub state: CellState,
+    pub owner_bag: Option<Entity>,
 }
 
 // Resources
@@ -139,7 +143,7 @@ impl InventoryGridState {
         // Pass 1: Place Bags
         for (i, saved_item) in inventory.items.iter().enumerate() {
              if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                 if def.item_type == ItemType::Bag {
+                 if matches!(def.item_type, ItemType::Bag { .. }) {
                      let entity_id = Entity::from_raw(i as u32);
                      let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
                      let rot = saved_item.rotation;
@@ -153,7 +157,7 @@ impl InventoryGridState {
         // Pass 2: Place Items
         for (i, saved_item) in inventory.items.iter().enumerate() {
             if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                if def.item_type != ItemType::Bag {
+                if !matches!(def.item_type, ItemType::Bag { .. }) {
                     let entity_id = Entity::from_raw(i as u32); // Pseudo-entity
                     let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
                     let rot = saved_item.rotation;
@@ -239,7 +243,10 @@ impl InventoryGridState {
                 let cell_pos = *pos + offset;
                 // If overlap, last bag wins (or we should prevent overlap)
                 // We insert Free state initially
-                self.grid.insert(cell_pos, Cell { state: CellState::Free });
+                self.grid.insert(cell_pos, Cell { 
+                    state: CellState::Free,
+                    owner_bag: Some(*entity),
+                });
             }
         }
     }
@@ -391,7 +398,8 @@ pub fn calculate_active_synergies(
                                   },
                                   SynergyEffect::BuffSelf { stat, value } => {
                                       pending_bonuses.entry(item.entity_id).or_default().push((stat, value));
-                                  }
+                                  },
+                                  _ => {}
                               }
                           }
                       }
@@ -434,7 +442,7 @@ pub fn calculate_combat_stats(
                     StatType::Attack => item_attack += val,
                     StatType::Defense => item_defense += val,
                     StatType::Speed => item_speed += val,
-                    _ => {}
+                    StatType::Health => stats.health += val,
                 }
             }
         }
@@ -465,13 +473,32 @@ pub fn calculate_combat_stats(
 
 // Systems
 fn visualize_synergy_system(
-    mut q_items: Query<(&ActiveSynergies, &mut BorderColor), Changed<ActiveSynergies>>,
+    mut commands: Commands,
+    mut q_items: Query<(Entity, &ActiveSynergies, &mut BorderColor), Changed<ActiveSynergies>>,
+    q_containers: Query<(Entity, &Parent), With<SynergyIndicatorContainer>>,
 ) {
-    for (active, mut border) in q_items.iter_mut() {
+    for (entity, active, mut border) in q_items.iter_mut() {
         if !active.bonuses.is_empty() {
              *border = BorderColor(Color::srgb(1.0, 0.84, 0.0)); // Gold
         } else {
              *border = BorderColor(Color::WHITE);
+        }
+
+        // Update Icons
+        for (container_entity, container_parent) in q_containers.iter() {
+            if container_parent.get() == entity {
+                commands.entity(container_entity).despawn_descendants();
+                
+                if !active.bonuses.is_empty() {
+                    commands.entity(container_entity).with_children(|p| {
+                        p.spawn((
+                            Text::new("★"),
+                            TextFont { font_size: 16.0, ..default() },
+                            TextColor(Color::srgb(1.0, 0.8, 0.0)),
+                        ));
+                    });
+                }
+            }
         }
     }
 }
@@ -515,12 +542,32 @@ fn synergy_system(
                                   },
                                   SynergyEffect::BuffSelf { stat, value } => {
                                       pending_bonuses.entry(entity).or_default().push((stat, value));
-                                  }
+                                  },
+                                  _ => {}
                               }
                           }
                       }
                  }
              }
+        }
+
+        // --- NEW: Bag-based Synergies ---
+        for synergy in &def.synergies {
+            if let SynergyEffect::BagBonus { bag_type, stat, value } = synergy.effect {
+                // Check if THIS item is inside a bag of bag_type
+                // Since an item can occupy multiple cells, we check the pivot cell
+                if let Some(cell) = grid_state.grid.get(&IVec2::new(pos.x, pos.y)) {
+                    if let Some(owner_bag) = cell.owner_bag {
+                         if let Some((_, _, bag_def)) = grid_state.bags.get(&owner_bag) {
+                              if let ItemType::Bag { bag_type: actual_bag_type } = bag_def.item_type {
+                                  if actual_bag_type == bag_type {
+                                      pending_bonuses.entry(entity).or_default().push((stat, value));
+                                  }
+                              }
+                         }
+                    }
+                }
+            }
         }
     }
 
@@ -562,7 +609,7 @@ fn update_drag_ghost_system(
          let estimated_pivot_y = ((top_val - padding) / stride).round() as i32 - min_y;
 
          let target_pos = IVec2::new(estimated_pivot_x, estimated_pivot_y);
-         let is_bag = def.item_type == ItemType::Bag;
+         let is_bag = matches!(def.item_type, ItemType::Bag { .. });
 
          // Check validity
          let is_valid = if is_bag {
@@ -869,7 +916,7 @@ fn update_inventory_slots(
                     // We spawn a node for EVERY slot to maintain grid structure (CSS Grid cell alignment)
                     // But we make invalid slots invisible/transparent
 
-                    let bg_color = if is_valid {
+                    let mut bg_color = if is_valid {
                         Color::srgb(0.3, 0.3, 0.3)
                     } else {
                         Color::NONE // Invisible
@@ -880,6 +927,26 @@ fn update_inventory_slots(
                     } else {
                         Color::NONE
                     };
+
+                    // Customize color based on bag type
+                    if is_valid {
+                        if let Some(cell) = grid_state.grid.get(&pos) {
+                            if let Some(owner_bag) = cell.owner_bag {
+                                if let Some((_, _, def)) = grid_state.bags.get(&owner_bag) {
+                                    use crate::plugins::items::BagType;
+                                    if let ItemType::Bag { bag_type } = def.item_type {
+                                        bg_color = match bag_type {
+                                            BagType::Default => Color::srgb(0.3, 0.3, 0.3),
+                                            BagType::Leather => Color::srgb(0.4, 0.3, 0.2),
+                                            BagType::PotionBelt => Color::srgb(0.2, 0.4, 0.2),
+                                            BagType::StaminaSack => Color::srgb(0.4, 0.4, 0.2),
+                                            BagType::FannyPack => Color::srgb(0.2, 0.2, 0.4),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Only render valid slots with distinct style
                     grid_parent.spawn((
@@ -940,7 +1007,7 @@ fn load_inventory_state(
         // Pass 1: Bags (Critical to establish grid)
         for saved_item in &persistent_inventory.items {
             if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                if def.item_type == ItemType::Bag {
+                if matches!(def.item_type, ItemType::Bag { .. }) {
                     let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
                     // Force spawn bag without validation (assumed valid from save),
                     // or validate if we want to be safe.
@@ -965,7 +1032,7 @@ fn load_inventory_state(
         // Pass 2: Items
         for saved_item in &persistent_inventory.items {
             if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                 if def.item_type != ItemType::Bag {
+                 if !matches!(def.item_type, ItemType::Bag { .. }) {
                      let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
 
                      if grid_state.can_place_item(&def.shape, pos, saved_item.rotation, None) {
@@ -998,7 +1065,7 @@ fn consume_pending_items(
              if let Some(def) = item_db.items.get(&item_key) {
 
                  // If it's a bag, try place bag
-                 if def.item_type == ItemType::Bag {
+                 if matches!(def.item_type, ItemType::Bag { .. }) {
                       warn!("Auto-placing bags from city not fully implemented yet.");
                  } else {
                      // Find free spot
@@ -1046,52 +1113,64 @@ pub fn spawn_item_entity(
      let left = 10.0 + effective_x as f32 * 52.0;
      let top = 10.0 + effective_y as f32 * 52.0;
 
-     let is_bag = def.item_type == ItemType::Bag;
+     let is_bag = matches!(def.item_type, ItemType::Bag { .. });
 
      // Bags: Lower Z-Index, Different color
      // Items: Higher Z-Index
-     let z_idx = if is_bag { ZIndex(1) } else { ZIndex(10) };
-     let color = if is_bag { Color::srgb(0.4, 0.2, 0.1) } else { Color::srgb(0.5, 0.5, 0.8) };
-     let border_col = if is_bag { Color::NONE } else { Color::WHITE };
+             let z_idx = if is_bag { ZIndex(1) } else { ZIndex(10) };
+             let color = if is_bag { Color::srgb(0.4, 0.2, 0.1) } else { Color::srgb(0.5, 0.5, 0.8) };
+             let border_col = if is_bag { Color::NONE } else { Color::WHITE };
 
-     let item_entity = commands.spawn((
-        Node {
-            width: Val::Px(width_px),
-            height: Val::Px(height_px),
-            position_type: PositionType::Absolute,
-            left: Val::Px(left),
-            top: Val::Px(top),
-            border: UiRect::all(Val::Px(2.0)),
-            ..default()
-        },
-        BackgroundColor(color),
-        BorderColor(border_col),
-        Interaction::default(),
-        Item,
-        GridPosition { x: pos.x, y: pos.y },
-        ItemSize { width: width_slots, height: height_slots },
-        ItemRotation { value: rotation },
-        ActiveSynergies::default(),
-        z_idx,
-        def.clone(),
-    ))
-    .with_children(|parent| {
-         parent.spawn((
-             Text::new(&def.name),
-             TextFont {
-                 font_size: 14.0,
-                 ..default()
-             },
-             TextColor(Color::WHITE),
-             Node {
-                 position_type: PositionType::Absolute,
-                 left: Val::Px(2.0),
-                 top: Val::Px(2.0),
-                 ..default()
-             },
-             PickingBehavior::IGNORE,
-         ));
-    })
+             let item_entity = commands.spawn((
+                Node {
+                    width: Val::Px(width_px),
+                    height: Val::Px(height_px),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(left),
+                    top: Val::Px(top),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(color),
+                BorderColor(border_col),
+                Interaction::default(),
+                Item,
+                GridPosition { x: pos.x, y: pos.y },
+                ItemSize { width: width_slots, height: height_slots },
+                ItemRotation { value: rotation },
+                ActiveSynergies::default(),
+                z_idx,
+                def.clone(),
+            ))
+            .with_children(|parent| {
+                 parent.spawn((
+                     Text::new(&def.name),
+                     TextFont {
+                         font_size: 14.0,
+                         ..default()
+                     },
+                     TextColor(Color::WHITE),
+                     Node {
+                         position_type: PositionType::Absolute,
+                         left: Val::Px(2.0),
+                         top: Val::Px(2.0),
+                         ..default()
+                     },
+                     PickingBehavior::IGNORE,
+                 ));
+
+                 // Synergy Indicators Container
+                 parent.spawn((
+                     Node {
+                         position_type: PositionType::Absolute,
+                         bottom: Val::Px(2.0),
+                         right: Val::Px(2.0),
+                         display: Display::Flex,
+                         ..default()
+                     },
+                     SynergyIndicatorContainer,
+                 ));
+            })
     .observe(handle_drag_start)
     .observe(handle_drag)
     .observe(handle_drag_drop)
@@ -1104,6 +1183,12 @@ pub fn spawn_item_entity(
         grid_state.bags.insert(item_entity, (pos, rotation, def.clone()));
         // Update Grid Slots (Recalculate all)
         grid_state.recalculate_grid();
+
+        // Re-occupy slots for all items because recalculate_grid cleared them
+        let bags_clone = grid_state.bags.clone(); // To avoid borrow checker issues if we needed q_items
+        // We actually need to find all items in the world.
+        // For simplicity in this helper, we'll let handle_drag_drop handle the re-registration 
+        // and only worry about the INITIAL load/spawn here.
     } else {
         // Occupy Grid Slots
         let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
@@ -1266,7 +1351,7 @@ fn handle_drag_drop(
         // Validation Logic Branch
         let mut success = false;
 
-        if def.item_type == ItemType::Bag {
+        if matches!(def.item_type, ItemType::Bag { .. }) {
             if grid_state.can_place_bag(&def.shape, target_pos, rotation.value, Some(entity)) {
                 // Update Bag List
                 grid_state.bags.insert(entity, (target_pos, rotation.value, def.clone()));
@@ -1276,7 +1361,7 @@ fn handle_drag_drop(
                 // Re-register all OTHER items (not the dragged one yet)
                 for (other_entity, other_pos, other_rot, other_def) in q_all_items.iter() {
                     // Skip bags in this pass (they don't occupy slots)
-                    if other_def.item_type == ItemType::Bag { continue; }
+                    if matches!(other_def.item_type, ItemType::Bag { .. }) { continue; }
 
                     let rotated_shape = InventoryGridState::get_rotated_shape(&other_def.shape, other_rot.value);
                     for offset in rotated_shape {
@@ -1420,7 +1505,7 @@ mod tests {
             name: "Starter Bag".to_string(),
             width: 3, height: 3, shape: vec![], // Auto-generated
             material: crate::plugins::items::MaterialType::Flesh,
-            item_type: crate::plugins::items::ItemType::Bag,
+            item_type: crate::plugins::items::ItemType::Bag { bag_type: crate::plugins::items::BagType::Default },
             tags: vec![], synergies: vec![],
             attack: 0.0, defense: 0.0, speed: 0.0,
             rarity: crate::plugins::items::ItemRarity::Common,
@@ -1512,8 +1597,8 @@ mod tests {
 
          // Update Grid State manually
          let mut grid = app.world_mut().resource_mut::<InventoryGridState>();
-         grid.grid.insert(IVec2::new(0,0), Cell { state: CellState::Occupied(e1) });
-         grid.grid.insert(IVec2::new(1,0), Cell { state: CellState::Occupied(e2) });
+         grid.grid.insert(IVec2::new(0,0), Cell { state: CellState::Occupied(e1), owner_bag: None });
+         grid.grid.insert(IVec2::new(1,0), Cell { state: CellState::Occupied(e2), owner_bag: None });
 
          // Run Check System
          app.add_systems(Update, check_recipes_system);

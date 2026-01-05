@@ -31,7 +31,7 @@ fn test_inventory_placement_logic() {
         grid_state.grid.clear();
         for y in 0..5 {
             for x in 0..5 {
-                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free });
+                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free, owner_bag: None });
             }
         }
 
@@ -53,7 +53,7 @@ fn test_inventory_placement_logic() {
         grid_state.grid.clear();
          for y in 0..5 {
             for x in 0..5 {
-                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free });
+                grid_state.grid.insert(IVec2::new(x, y), Cell { state: CellState::Free, owner_bag: None });
             }
         }
 

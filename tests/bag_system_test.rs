@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use cursed_warden::plugins::inventory::{InventoryPlugin, InventoryGridState, Item, ItemRotation, GridPosition, CellState};
-use cursed_warden::plugins::items::{ItemDatabase, ItemDefinition, ItemType, MaterialType, ItemRarity};
+use cursed_warden::plugins::items::{ItemDatabase, ItemDefinition, ItemType, MaterialType, ItemRarity, BagType};
 use cursed_warden::plugins::metagame::{PersistentInventory, SavedItem};
 
 // Helper to create a minimal app with necessary plugins
@@ -27,7 +27,7 @@ fn create_bag_def(id: &str, w: u8, h: u8) -> ItemDefinition {
         name: id.to_string(),
         width: w, height: h, shape,
         material: MaterialType::Flesh,
-        item_type: ItemType::Bag,
+        item_type: ItemType::Bag { bag_type: BagType::Default },
         rarity: ItemRarity::Common,
         price: 0,
         tags: vec![], synergies: vec![],
@@ -48,10 +48,10 @@ fn test_bag_mechanics() {
     item_db.items.insert("bag_1x1".to_string(), bag_1x1.clone());
 
     // 1. Initial State: Grid should be empty
-    let mut grid_state = app.world().resource::<InventoryGridState>();
+    let grid_state_resource = app.world().resource::<InventoryGridState>();
     // Wait, InventoryGridState::default() is empty.
-    assert!(grid_state.grid.is_empty());
-    assert!(grid_state.bags.is_empty());
+    assert!(grid_state_resource.grid.is_empty());
+    assert!(grid_state_resource.bags.is_empty());
 
     // 2. Place First Bag (2x2) at (2,2)
     // First bag can be placed anywhere (adjacency rule doesn't apply to first)
@@ -116,9 +116,11 @@ fn test_bag_mechanics() {
     // Occupy slot
     if let Some(cell) = grid_state.grid.get_mut(&IVec2::new(2,2)) {
         cell.state = CellState::Occupied(Entity::from_raw(99));
+        cell.owner_bag = Some(Entity::from_raw(1)); // Assume owned by bag 1
     }
     if let Some(cell) = grid_state.grid.get_mut(&IVec2::new(2,3)) {
         cell.state = CellState::Occupied(Entity::from_raw(99));
+        cell.owner_bag = Some(Entity::from_raw(1)); // Assume owned by bag 1
     }
 
     // Test overlap

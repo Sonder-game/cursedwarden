@@ -108,6 +108,12 @@ pub enum SynergyEffect {
         stat: StatType,
         value: f32,
     },
+    // Bonus for BEING inside a specific bag type
+    BagBonus {
+        bag_type: BagType,
+        stat: StatType,
+        value: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Hash)]
@@ -134,7 +140,17 @@ pub enum ItemType {
     Weapon,
     Consumable,
     Ammo,
-    Bag,
+    Bag { bag_type: BagType },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub enum BagType {
+    #[default]
+    Default,
+    Leather,
+    PotionBelt,
+    StaminaSack,
+    FannyPack,
 }
 
 pub struct ItemsPlugin;
@@ -297,7 +313,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 3,
             shape: vec![],
             material: MaterialType::Flesh, // Leather
-            item_type: ItemType::Bag,
+            item_type: ItemType::Bag { bag_type: BagType::Default },
             rarity: ItemRarity::Common, // Not in shop typically
             price: 0,
             tags: vec![],
@@ -313,7 +329,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 2,
             shape: vec![],
             material: MaterialType::Flesh,
-            item_type: ItemType::Bag,
+            item_type: ItemType::Bag { bag_type: BagType::Leather },
             rarity: ItemRarity::Common,
             price: 4,
             tags: vec![],
@@ -329,7 +345,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 1,
             shape: vec![],
             material: MaterialType::Flesh,
-            item_type: ItemType::Bag,
+            item_type: ItemType::Bag { bag_type: BagType::FannyPack },
             rarity: ItemRarity::Rare,
             price: 6,
             tags: vec![],
@@ -347,7 +363,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 1,
             shape: vec![],
             material: MaterialType::Flesh,
-            item_type: ItemType::Bag,
+            item_type: ItemType::Bag { bag_type: BagType::PotionBelt },
             rarity: ItemRarity::Epic,
             price: 8,
             tags: vec![],
@@ -363,7 +379,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             height: 1,
             shape: vec![],
             material: MaterialType::Flesh,
-            item_type: ItemType::Bag,
+            item_type: ItemType::Bag { bag_type: BagType::StaminaSack },
             rarity: ItemRarity::Rare,
             price: 5,
             tags: vec![],
