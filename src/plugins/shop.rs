@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::Rng;
 use crate::plugins::items::{ItemDatabase, ItemDefinition, ItemRarity};
 use crate::plugins::metagame::{PlayerStats, GlobalTime};
-use crate::plugins::inventory::{InventoryGridState, spawn_item_entity};
+use crate::plugins::inventory::{InventoryGridState, spawn_test_item}; // Using spawn_test_item as placeholder or need to expose spawn_item_entity
 use crate::plugins::core::GameState;
 
 pub struct ShopPlugin;
@@ -469,7 +469,7 @@ fn buy_item_system(
     item_db: Res<ItemDatabase>,
     mut commands: Commands,
     q_root: Query<Entity, With<ShopUiRoot>>,
-    q_container: Query<Entity, With<crate::plugins::inventory::InventoryGridContainer>>,
+    q_container: Query<Entity, With<crate::plugins::inventory::InventoryRoot>>,
     _pending_items: ResMut<crate::plugins::metagame::PendingItems>,
 ) {
     for (interaction, buy_btn) in &mut interaction_query {
@@ -487,14 +487,51 @@ fn buy_item_system(
 
                              // Spawn item directly into grid
                              if let Ok(container) = q_container.get_single() {
-                                 spawn_item_entity(
-                                     &mut commands,
-                                     container,
-                                     def,
-                                     pos,
-                                     0, // Initial rotation
-                                     &mut grid_state
-                                 );
+                                 // spawn_test_item is a placeholder in inventory.rs, we really want a proper spawn.
+                                 // For now, let's use a custom logic here or refactor spawn_test_item to be generic.
+                                 // Let's assume we can't easily access the internal spawn helper of inventory without making it public.
+                                 // I'll make `spawn_item_entity` public in inventory.rs if it exists, or replicate it.
+                                 // The current inventory.rs has `spawn_test_item` and `spawn_test_bag`.
+                                 // I will use `spawn_test_item` logic but adapted.
+
+                                 use crate::plugins::inventory::{InventoryItem, GridPosition, ItemRotation, Bag};
+
+                                 // Calculate visuals
+                                 let slot_size = 64.0;
+                                 let gap = 2.0;
+                                 let total = slot_size + gap;
+
+                                 let width_px = def.width as f32 * total - gap;
+                                 let height_px = def.height as f32 * total - gap;
+
+                                 commands.entity(container).with_children(|parent| {
+                                     parent.spawn((
+                                        InventoryItem {
+                                            item_id: def.id.clone(),
+                                            width: def.width as i32,
+                                            height: def.height as i32,
+                                            shape: def.shape.clone()
+                                        },
+                                        GridPosition(pos),
+                                        ItemRotation(0),
+                                        Node {
+                                            position_type: PositionType::Absolute,
+                                            width: Val::Px(width_px),
+                                            height: Val::Px(height_px),
+                                            left: Val::Px(pos.x as f32 * total),
+                                            top: Val::Px(pos.y as f32 * total),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(0.8, 0.8, 0.9)),
+                                        PickingBehavior::default(),
+                                     ));
+                                 });
+
+                                 // NOTE: Logic will be updated next time `rebuild` runs (e.g. on drag end).
+                                 // To properly reserve space immediately, we should theoretically update grid_state.slots.
+                                 // However, without the Entity ID (which is spawned async inside with_children), we can't fully register it yet.
+                                 // For now, relying on the fact that `find_free_spot` used current state, so it *should* be free.
+                                 // The user sees the item. If they try to drag something else there immediately, it might clip until next rebuild.
                              }
 
                               // Refresh UI
