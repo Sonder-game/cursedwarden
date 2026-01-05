@@ -16,7 +16,7 @@ pub struct RecipeDefinition {
     pub catalysts: Vec<String>, // Item IDs that are required but not consumed
 }
 
-#[derive(Debug, Clone, Deserialize, Component)]
+#[derive(Debug, Clone, Deserialize, Component, Default)]
 pub struct ItemDefinition {
     pub id: String,
     pub name: String,
@@ -118,17 +118,19 @@ pub enum StatType {
     Health,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[allow(dead_code)]
 pub enum MaterialType {
+    #[default]
     Steel,
     Silver,
     Flesh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[allow(dead_code)]
 pub enum ItemType {
+    #[default]
     Weapon,
     Consumable,
     Ammo,

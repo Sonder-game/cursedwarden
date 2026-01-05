@@ -1237,7 +1237,7 @@ fn handle_drag_end(
 fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
-    mut q_item: Query<(&mut ZIndex, &mut Node, &mut ItemRotation, &mut ItemSize, &mut GridPosition, &ItemDefinition), With<Item>>,
+    mut q_item: Query<(&mut ZIndex, &mut Node, &mut ItemRotation, &mut ItemSize, &mut GridPosition, &ItemDefinition), (With<Item>, With<DragOriginalPosition>)>,
     q_all_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition), (With<Item>, Without<DragOriginalPosition>)>,
     q_original: Query<&DragOriginalPosition>,
     mut grid_state: ResMut<InventoryGridState>,
