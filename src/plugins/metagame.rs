@@ -66,9 +66,25 @@ pub struct MetagamePlugin;
 pub struct PendingItems(pub Vec<String>);
 
 /// Holds inventory state between Evening phases (e.g. during Combat)
-#[derive(Resource, Default, Debug, Clone)]
+#[derive(Resource, Debug, Clone)]
 pub struct PersistentInventory {
     pub items: Vec<SavedItem>,
+}
+
+impl Default for PersistentInventory {
+    fn default() -> Self {
+        Self {
+            items: vec![
+                // Starter Bag at center-ish
+                SavedItem {
+                    item_id: "starter_bag".to_string(),
+                    grid_x: 2,
+                    grid_y: 2,
+                    rotation: 0,
+                }
+            ],
+        }
+    }
 }
 
 #[derive(Component)]
