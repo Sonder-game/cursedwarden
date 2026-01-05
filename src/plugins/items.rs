@@ -84,6 +84,16 @@ pub struct SynergyDefinition {
     // If the item at 'offset' has ANY of these tags, the effect triggers
     pub target_tags: Vec<ItemTag>,
     pub effect: SynergyEffect,
+    #[serde(default)]
+    pub visual_type: SynergyVisualType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub enum SynergyVisualType {
+    #[default]
+    None,
+    Star,    // Activator
+    Diamond, // Target
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,22 +212,26 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
                 SynergyDefinition {
                     offset: IVec2::new(1, 0), // Right
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_type: SynergyVisualType::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(-1, 0), // Left
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_type: SynergyVisualType::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(0, 1), // Top
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_type: SynergyVisualType::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(0, -1), // Bottom
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_type: SynergyVisualType::Star,
                 }
             ],
             attack: 0.0,
