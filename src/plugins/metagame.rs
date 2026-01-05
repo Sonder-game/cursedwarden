@@ -55,7 +55,7 @@ impl Default for GlobalTime {
 
 // Plugin
 use crate::plugins::core::{GameState, DaySubState};
-use crate::plugins::inventory::{InventoryGridState, GridPosition, ItemRotation};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemSize, InventoryGridContainer, ItemSpawnedEvent, CellState, ItemRotation};
 use crate::plugins::items::ItemDatabase;
 use std::fs::File;
 use std::io::{Write, Read};
@@ -226,21 +226,183 @@ fn day_start_logic() {
     println!("Day Phase Started: Morning has broken.");
 }
 
-// Serialization Helpers - STUBBED for inventory refactor
-// TODO: Re-implement persistence for new Grid/Bag system
+// Serialization Helpers
+
+pub fn create_save_data(
+    player_stats: &PlayerStats,
+    global_time: &GlobalTime,
+    q_items: &Query<(&ItemDefinition, &GridPosition, &ItemRotation), With<Item>>,
+) -> SaveData {
+    let mut saved_items = Vec::new();
+    for (def, pos, rot) in q_items.iter() {
+        saved_items.push(SavedItem {
+            item_id: def.id.clone(),
+            grid_x: pos.x,
+            grid_y: pos.y,
+            rotation: rot.value,
+        });
+    }
+
+    SaveData {
+        player_stats: player_stats.clone(),
+        global_time: global_time.clone(),
+        inventory: saved_items,
+    }
+}
 
 fn save_system(
     input: Res<ButtonInput<KeyCode>>,
+    player_stats: Res<PlayerStats>,
+    global_time: Res<GlobalTime>,
+    q_items: Query<(&ItemDefinition, &GridPosition, &ItemRotation), With<Item>>,
 ) {
     if input.just_pressed(KeyCode::F5) {
-        warn!("Save system temporarily disabled due to inventory refactor");
+        let save_data = create_save_data(&player_stats, &global_time, &q_items);
+
+        match serde_json::to_string_pretty(&save_data) {
+            Ok(json) => {
+                if let Ok(mut file) = File::create("savegame.json") {
+                    if let Err(e) = file.write_all(json.as_bytes()) {
+                        error!("Failed to write save file: {}", e);
+                    } else {
+                        info!("Game saved successfully to savegame.json");
+                    }
+                } else {
+                    error!("Failed to create save file");
+                }
+            },
+            Err(e) => error!("Failed to serialize save data: {}", e),
+        }
     }
 }
 
 fn load_system_debug(
     input: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    mut player_stats: ResMut<PlayerStats>,
+    mut global_time: ResMut<GlobalTime>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_items: Query<Entity, With<Item>>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
 ) {
     if input.just_pressed(KeyCode::F9) {
-        warn!("Load system temporarily disabled due to inventory refactor");
+        if let Ok(mut file) = File::open("savegame.json") {
+            let mut json = String::new();
+            if file.read_to_string(&mut json).is_ok() {
+                match serde_json::from_str::<SaveData>(&json) {
+                    Ok(data) => {
+                        // Apply loaded state
+                        *player_stats = data.player_stats;
+                        *global_time = data.global_time;
+
+                        // Clear current inventory
+                        for entity in q_items.iter() {
+                            commands.entity(entity).despawn_recursive();
+                        }
+                        // grid_state.cells.clear();
+                        for cell in grid_state.grid.values_mut() {
+                            cell.state = CellState::Free;
+                        }
+
+                        // Respawn items
+                        if let Ok(container) = q_container.get_single() {
+                            for saved_item in data.inventory {
+                                if let Some(def) = item_db.items.get(&saved_item.item_id) {
+                                     let rotation = saved_item.rotation;
+                                     let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
+
+                                     // Recalculate size from shape
+                                     let mut min_x = 0;
+                                     let mut max_x = 0;
+                                     let mut min_y = 0;
+                                     let mut max_y = 0;
+                                     if !rotated_shape.is_empty() {
+                                         min_x = rotated_shape[0].x;
+                                         max_x = rotated_shape[0].x;
+                                         min_y = rotated_shape[0].y;
+                                         max_y = rotated_shape[0].y;
+                                         for p in &rotated_shape {
+                                             if p.x < min_x { min_x = p.x; }
+                                             if p.x > max_x { max_x = p.x; }
+                                             if p.y < min_y { min_y = p.y; }
+                                             if p.y > max_y { max_y = p.y; }
+                                         }
+                                     }
+                                     let width_slots = max_x - min_x + 1;
+                                     let height_slots = max_y - min_y + 1;
+
+                                     let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+
+                                     // Visuals
+                                     let effective_x = pos.x + min_x;
+                                     let effective_y = pos.y + min_y;
+
+                                     let left = 10.0 + effective_x as f32 * 52.0;
+                                     let top = 10.0 + effective_y as f32 * 52.0;
+                                     let width = width_slots as f32 * 50.0 + (width_slots - 1) as f32 * 2.0;
+                                     let height = height_slots as f32 * 50.0 + (height_slots - 1) as f32 * 2.0;
+
+                                     let item_entity = commands.spawn((
+                                        Node {
+                                            width: Val::Px(width),
+                                            height: Val::Px(height),
+                                            position_type: PositionType::Absolute,
+                                            left: Val::Px(left),
+                                            top: Val::Px(top),
+                                            border: UiRect::all(Val::Px(2.0)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
+                                        BorderColor(Color::WHITE),
+                                        Interaction::default(),
+                                        Item,
+                                        GridPosition { x: pos.x, y: pos.y },
+                                        ItemSize { width: width_slots, height: height_slots },
+                                        ItemRotation { value: rotation },
+                                        def.clone(),
+                                    ))
+                                    .with_children(|parent| {
+                                         parent.spawn((
+                                             Text::new(&def.name),
+                                             TextFont {
+                                                 font_size: 14.0,
+                                                 ..default()
+                                             },
+                                             TextColor(Color::WHITE),
+                                             Node {
+                                                 position_type: PositionType::Absolute,
+                                                 left: Val::Px(2.0),
+                                                 top: Val::Px(2.0),
+                                                 ..default()
+                                             },
+                                         ));
+                                    })
+                                    .id();
+
+                                    // Trigger event to attach drag observers
+                                    commands.trigger(ItemSpawnedEvent(item_entity));
+
+                                    // Add to grid state
+                                    for offset in rotated_shape {
+                                        let cell_pos = pos + offset;
+                                        if let Some(cell) = grid_state.grid.get_mut(&cell_pos) {
+                                            cell.state = CellState::Occupied(item_entity);
+                                        }
+                                    }
+
+                                    commands.entity(container).add_child(item_entity);
+                                }
+                            }
+                        }
+
+                        info!("Game loaded successfully.");
+                    },
+                    Err(e) => error!("Failed to deserialize save data: {}", e),
+                }
+            }
+        } else {
+            warn!("No save file found.");
+        }
     }
 }
