@@ -1237,7 +1237,7 @@ fn handle_drag_end(
 fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
-    mut q_item: Query<(&mut ZIndex, &mut Node, &mut ItemRotation, &mut ItemSize, &mut GridPosition, &ItemDefinition), With<Item>>,
+    mut q_item: Query<(&mut ZIndex, &mut Node, &mut ItemRotation, &mut ItemSize, &mut GridPosition, &ItemDefinition), (With<Item>, With<DragOriginalPosition>)>,
     q_all_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition), (With<Item>, Without<DragOriginalPosition>)>,
     q_original: Query<&DragOriginalPosition>,
     mut grid_state: ResMut<InventoryGridState>,
@@ -1501,13 +1501,29 @@ mod tests {
          let e1 = app.world_mut().spawn((
              Item,
              GridPosition { x: 0, y: 0 },
-             ItemDefinition { id: "ing1".to_string(), ..default() } // Simplified
+             ItemDefinition {
+                 id: "ing1".to_string(),
+                 name: "Ing1".to_string(),
+                 width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+                 material: crate::plugins::items::MaterialType::Steel,
+                 item_type: crate::plugins::items::ItemType::Weapon,
+                 tags: vec![], synergies: vec![],
+                 attack: 0.0, defense: 0.0, speed: 0.0, rarity: crate::plugins::items::ItemRarity::Common, price: 0
+             }
          )).id();
 
          let e2 = app.world_mut().spawn((
              Item,
              GridPosition { x: 1, y: 0 },
-             ItemDefinition { id: "ing2".to_string(), ..default() }
+             ItemDefinition {
+                 id: "ing2".to_string(),
+                 name: "Ing2".to_string(),
+                 width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+                 material: crate::plugins::items::MaterialType::Steel,
+                 item_type: crate::plugins::items::ItemType::Weapon,
+                 tags: vec![], synergies: vec![],
+                 attack: 0.0, defense: 0.0, speed: 0.0, rarity: crate::plugins::items::ItemRarity::Common, price: 0
+             }
          )).id();
 
          // Update Grid State manually
