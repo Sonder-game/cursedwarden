@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
+use bevy::utils::HashSet;
 use crate::plugins::core::GameState;
-use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType, ItemType};
+use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType, ItemType, SynergyVisualHint};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
 
@@ -10,10 +11,12 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
+           .init_resource::<PendingCrafts>()
            .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system, update_inventory_slots).run_if(in_state(GameState::EveningPhase)))
-           .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
+           // Move crafting execution to NightPhase entry
+           .add_systems(OnEnter(GameState::NightPhase), (execute_crafting_system, apply_deferred, crate::plugins::mutation::mutation_system).chain())
+           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system, update_inventory_slots, draw_synergy_lines_system, check_recipes_system).run_if(in_state(GameState::EveningPhase)))
            .add_observer(attach_drag_observers);
     }
 }
@@ -65,6 +68,16 @@ pub struct DragOriginalPosition {
     pub rotation: u8,
 }
 
+#[derive(Component)]
+pub struct DragGhost;
+
+#[derive(Component)]
+pub struct CraftingCandidate {
+    pub recipe_index: usize,
+    pub is_valid: bool, // If false, means partial match (Blue line), if true, full match (Gold line)
+    pub other_ingredients: Vec<Entity>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellState {
     Free,
@@ -84,6 +97,12 @@ pub struct InventoryGridState {
    pub bags: HashMap<Entity, (IVec2, u8, ItemDefinition)>,
    pub width: i32,
    pub height: i32,
+}
+
+#[derive(Resource, Default)]
+pub struct PendingCrafts {
+    // List of recipes to execute: (Result Item ID, Ingredients to Remove)
+    pub crafts: Vec<(String, Vec<Entity>)>,
 }
 
 impl Default for InventoryGridState {
@@ -453,6 +472,254 @@ fn visualize_synergy_system(
         }
     }
 }
+
+// Draws lines between synergy sources and targets using Gizmos
+fn draw_synergy_lines_system(
+    mut gizmos: Gizmos,
+    q_items: Query<(Entity, &GlobalTransform, &GridPosition, &ItemRotation, &ItemDefinition, &Node)>,
+    grid_state: Res<InventoryGridState>,
+    q_tags: Query<(&ItemDefinition, &GlobalTransform)>,
+    mut pending_crafts: ResMut<PendingCrafts>, // We write to this in check_recipes
+) {
+    // We reuse this system loop to avoid duplicating the grid scan logic for "visual" things
+    // But crafting is logically distinct. We'll handle crafting logic in `check_recipes_system` and keep this for synergies.
+
+    for (entity, global_transform, pos, rot, def, node) in q_items.iter() {
+        if def.synergies.is_empty() { continue; }
+
+        let start_pos = global_transform.translation().truncate();
+
+        for synergy in &def.synergies {
+             // 1. Where is the Star? (Relative to item origin)
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], rot.value);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0]; // (dx, dy) in grid space
+
+             // 2. Where is the Target in Grid Space?
+             let target_grid_pos = IVec2::new(pos.x, pos.y) + rotated_offset;
+
+             // 3. Is there a valid target?
+             if let Some(cell) = grid_state.grid.get(&target_grid_pos) {
+                 if let CellState::Occupied(target_entity) = cell.state {
+                      if let Ok((target_def, target_trans)) = q_tags.get(target_entity) {
+                          if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
+                               // Match found! Draw Line.
+                               let target_pos = target_trans.translation().truncate();
+
+                               // Visual Adjustment: Center of the items
+                               let start_center = start_pos + Vec2::new(25.0, -25.0);
+                               let target_center = target_pos + Vec2::new(25.0, -25.0);
+
+                               // Draw line based on hint
+                               let color = match synergy.visual_hint {
+                                   SynergyVisualHint::Star => Color::srgb(1.0, 0.84, 0.0), // Gold
+                                   SynergyVisualHint::Diamond => Color::srgb(0.0, 0.5, 1.0), // Blue
+                                   SynergyVisualHint::None => Color::srgb(0.5, 0.5, 0.5), // Grey
+                               };
+
+                               gizmos.line_2d(start_center, target_center, color);
+
+                               // If Star, maybe draw a small circle at start
+                               if matches!(synergy.visual_hint, SynergyVisualHint::Star) {
+                                   gizmos.circle_2d(start_center, 5.0, color);
+                               }
+                          }
+                      }
+                 }
+             }
+        }
+    }
+}
+
+fn check_recipes_system(
+    mut gizmos: Gizmos,
+    q_items: Query<(Entity, &GlobalTransform, &GridPosition, &ItemRotation, &ItemDefinition)>,
+    grid_state: Res<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    mut pending_crafts: ResMut<PendingCrafts>,
+) {
+    // 1. Clear previous frame pending crafts (we recalculate every frame during Evening to show lines)
+    pending_crafts.crafts.clear();
+
+    // 2. Iterate all recipes
+    for recipe in &item_db.recipes {
+        // Naive approach: Iterate all items, try to find a starting ingredient, then BFS/search for others adjacent.
+        // Simplified: Backpack Battles usually requires specific adjacency.
+        // e.g. Sword + Stone adjacent.
+        // We look for any item matching the first ingredient.
+        if recipe.ingredients.is_empty() { continue; }
+        let first_ing_id = &recipe.ingredients[0];
+
+        for (entity, transform, pos, rot, def) in q_items.iter() {
+            if def.id == *first_ing_id {
+                // Potential start of a recipe.
+                // We need to find the OTHER ingredients adjacent to this one.
+                // This is a graph matching problem.
+                // For simplicity: Support 2-ingredient recipes robustly first.
+
+                if recipe.ingredients.len() == 2 {
+                     let second_ing_id = &recipe.ingredients[1];
+
+                     // Check all adjacent cells of this item
+                     let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rot.value);
+                     let mut found_neighbor = None;
+
+                     for offset in &rotated_shape {
+                         let cell_pos = IVec2::new(pos.x, pos.y) + *offset;
+                         // Check 4 neighbors of this cell
+                         let neighbors = [IVec2::new(1,0), IVec2::new(-1,0), IVec2::new(0,1), IVec2::new(0,-1)];
+
+                         for n in neighbors {
+                             let check_pos = cell_pos + n;
+                             if let Some(cell) = grid_state.grid.get(&check_pos) {
+                                 if let CellState::Occupied(neighbor_entity) = cell.state {
+                                     if neighbor_entity == entity { continue; } // Self
+
+                                     // Check if this neighbor is the second ingredient
+                                     if let Ok((_, n_trans, _, _, n_def)) = q_items.get(neighbor_entity) {
+                                         if n_def.id == *second_ing_id {
+                                             found_neighbor = Some((neighbor_entity, n_trans));
+                                             break;
+                                         }
+                                     }
+                                 }
+                             }
+                         }
+                         if found_neighbor.is_some() { break; }
+                     }
+
+                     if let Some((neighbor_entity, n_trans)) = found_neighbor {
+                         // Valid Recipe Found!
+                         // 1. Visuals
+                         let start = transform.translation().truncate() + Vec2::new(25.0, -25.0);
+                         let end = n_trans.translation().truncate() + Vec2::new(25.0, -25.0);
+
+                         // Gold thick line
+                         gizmos.line_2d(start, end, Color::srgb(1.0, 0.84, 0.0));
+
+                         // 2. Register for execution
+                         pending_crafts.crafts.push((
+                             recipe.result.clone(),
+                             vec![entity, neighbor_entity]
+                         ));
+                     } else {
+                         // Partial Match? (Blue Line) - Not easily deducible without knowing where the user *intends* to put it.
+                         // But we could highlight the item itself as "looking for partner".
+                     }
+                }
+            }
+        }
+    }
+}
+
+fn execute_crafting_system(
+    mut commands: Commands,
+    mut pending_crafts: ResMut<PendingCrafts>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+    q_items: Query<&ItemDefinition>,
+) {
+    let mut consumed_entities = HashSet::new();
+
+    if let Ok(container) = q_container.get_single() {
+        for (result_id, ingredients) in &pending_crafts.crafts {
+            // Check if ANY ingredient is already consumed in this frame
+            let already_consumed = ingredients.iter().any(|e| consumed_entities.contains(e));
+            if already_consumed {
+                continue;
+            }
+
+            // Validate ingredients still exist (paranoid check)
+            let mut valid = true;
+            let mut anchor_pos = IVec2::ZERO; // Where to spawn result? Use first ingredient pos.
+
+            for (i, &entity) in ingredients.iter().enumerate() {
+                 if commands.get_entity(entity).is_none() {
+                     valid = false;
+                     break;
+                 }
+
+                 // Capture anchor position from the first valid ingredient
+                 if i == 0 {
+                     // Try to find the grid position of this entity in the grid state
+                     // Because we don't have component query access here easily without adding more params,
+                     // we scan the grid map. This is acceptable for the small inventory size (12x12).
+                     let mut found_pos = None;
+                     for (pos, cell) in &grid_state.grid {
+                         if let CellState::Occupied(occ) = cell.state {
+                             if occ == entity {
+                                 found_pos = Some(*pos);
+                                 break;
+                             }
+                         }
+                     }
+                     if let Some(p) = found_pos {
+                         anchor_pos = p;
+                     }
+                 }
+            }
+
+            if valid {
+                // Mark ingredients as consumed
+                for &entity in ingredients {
+                    consumed_entities.insert(entity);
+                }
+
+                // 1. Remove Ingredients
+                for &entity in ingredients {
+                    // Remove from Grid
+                    let mut cells_to_clear = Vec::new();
+                    for (pos, cell) in grid_state.grid.iter() {
+                         if let CellState::Occupied(occ) = cell.state {
+                             if occ == entity { cells_to_clear.push(*pos); }
+                         }
+                    }
+                    for pos in cells_to_clear {
+                        if let Some(cell) = grid_state.grid.get_mut(&pos) {
+                            cell.state = CellState::Free;
+                        }
+                    }
+                    // Despawn Entity
+                    commands.entity(entity).despawn_recursive();
+                }
+
+                // 2. Spawn Result
+                if let Some(result_def) = item_db.items.get(result_id) {
+                     // Attempt to place at anchor_pos first
+                     // Check if anchor_pos is valid for new item
+                     let mut target_pos = None;
+
+                     if grid_state.can_place_item(&result_def.shape, anchor_pos, 0, None) {
+                         target_pos = Some(anchor_pos);
+                     } else {
+                         // Fallback: Find free spot
+                         target_pos = grid_state.find_free_spot(result_def);
+                     }
+
+                     if let Some(pos) = target_pos {
+                         spawn_item_entity(
+                             &mut commands,
+                             container,
+                             result_def,
+                             pos,
+                             0,
+                             &mut grid_state
+                         );
+                         info!("Crafted {}!", result_def.name);
+                     } else {
+                         warn!("Crafted item {} has no room!", result_def.name);
+                         // In a real game, this item should go to stash/overflow.
+                         // For now, it is lost, which is an acceptable edge case for this milestone.
+                     }
+                }
+            }
+        }
+    }
+    // Clear pending
+    pending_crafts.crafts.clear();
+}
+
 
 fn synergy_system(
     mut q_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition, &mut ActiveSynergies)>,
@@ -916,10 +1183,11 @@ fn attach_drag_observers(
 fn handle_drag_start(
     trigger: Trigger<Pointer<DragStart>>,
     mut commands: Commands,
-    mut q_node: Query<(&mut ZIndex, &Node, &ItemRotation)>,
+    mut q_node: Query<(&mut ZIndex, &Node, &ItemRotation, &ItemDefinition)>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
 ) {
     let entity = trigger.entity();
-    if let Ok((mut z_index, node, rotation)) = q_node.get_mut(entity) {
+    if let Ok((mut z_index, node, rotation, def)) = q_node.get_mut(entity) {
         commands.entity(entity).insert(DragOriginalPosition {
             left: node.left,
             top: node.top,
@@ -931,12 +1199,44 @@ fn handle_drag_start(
             should_block_lower: false,
             ..default()
         });
+
+        // Spawn Ghost
+        if let Ok(container) = q_container.get_single() {
+             let (min_x, min_y, width_slots, height_slots) = InventoryGridState::calculate_bounding_box(&def.shape, rotation.value);
+             let width_px = width_slots as f32 * 50.0 + (width_slots - 1) as f32 * 2.0;
+             let height_px = height_slots as f32 * 50.0 + (height_slots - 1) as f32 * 2.0;
+
+             let ghost = commands.spawn((
+                 Node {
+                     width: Val::Px(width_px),
+                     height: Val::Px(height_px),
+                     position_type: PositionType::Absolute,
+                     left: node.left, // Initially same position
+                     top: node.top,
+                     border: UiRect::all(Val::Px(2.0)),
+                     ..default()
+                 },
+                 BackgroundColor(Color::srgba(0.0, 1.0, 0.0, 0.3)), // Green semi-transparent
+                 BorderColor(Color::WHITE),
+                 DragGhost,
+                 ZIndex(90),
+                 PickingBehavior::IGNORE,
+             )).id();
+             commands.entity(container).add_child(ghost);
+             commands.entity(entity).insert(DragGhostLink(ghost));
+        }
     }
 }
+
+#[derive(Component)]
+struct DragGhostLink(Entity);
 
 fn handle_drag(
     trigger: Trigger<Pointer<Drag>>,
     mut q_node: Query<&mut Node>,
+    q_ghost_link: Query<(&DragGhostLink, &ItemRotation, &ItemDefinition)>,
+    mut q_ghost: Query<(&mut Node, &mut BackgroundColor), (With<DragGhost>, Without<Item>)>,
+    grid_state: Res<InventoryGridState>,
 ) {
     let entity = trigger.entity();
     if let Ok(mut node) = q_node.get_mut(entity) {
@@ -947,15 +1247,62 @@ fn handle_drag(
         if let Val::Px(current_top) = node.top {
             node.top = Val::Px(current_top + event.delta.y);
         }
+
+        // Update Ghost Position
+        if let Ok((link, rot, def)) = q_ghost_link.get(entity) {
+             if let Ok((mut ghost_node, mut ghost_color)) = q_ghost.get_mut(link.0) {
+                 // Calculate Snapped Position
+                 let padding = 10.0;
+                 let stride = 52.0;
+                 let mut left_val = 0.0;
+                 let mut top_val = 0.0;
+                 if let Val::Px(l) = node.left { left_val = l; }
+                 if let Val::Px(t) = node.top { top_val = t; }
+
+                 let (min_x, min_y, _, _) = InventoryGridState::calculate_bounding_box(&def.shape, rot.value);
+                 let estimated_pivot_x = ((left_val - padding) / stride).round() as i32 - min_x;
+                 let estimated_pivot_y = ((top_val - padding) / stride).round() as i32 - min_y;
+
+                 let target_pos = IVec2::new(estimated_pivot_x, estimated_pivot_y);
+
+                 let effective_x = target_pos.x + min_x;
+                 let effective_y = target_pos.y + min_y;
+                 let snapped_left = padding + effective_x as f32 * stride;
+                 let snapped_top = padding + effective_y as f32 * stride;
+
+                 ghost_node.left = Val::Px(snapped_left);
+                 ghost_node.top = Val::Px(snapped_top);
+
+                 // Update Ghost Color
+                 let valid = if def.item_type == ItemType::Bag {
+                     grid_state.can_place_bag(&def.shape, target_pos, rot.value, Some(entity))
+                 } else {
+                     grid_state.can_place_item(&def.shape, target_pos, rot.value, Some(entity))
+                 };
+
+                 if valid {
+                     *ghost_color = BackgroundColor(Color::srgba(0.0, 1.0, 0.0, 0.3));
+                 } else {
+                     *ghost_color = BackgroundColor(Color::srgba(1.0, 0.0, 0.0, 0.3));
+                 }
+             }
+        }
     }
 }
 
 fn handle_drag_end(
     trigger: Trigger<Pointer<DragEnd>>,
     mut commands: Commands,
+    q_ghost_link: Query<&DragGhostLink>,
 ) {
     let entity = trigger.entity();
     commands.entity(entity).remove::<PickingBehavior>();
+
+    // Despawn Ghost
+    if let Ok(link) = q_ghost_link.get(entity) {
+        commands.entity(link.0).despawn_recursive();
+    }
+    commands.entity(entity).remove::<DragGhostLink>();
 }
 
 fn handle_drag_drop(
@@ -1116,6 +1463,7 @@ mod tests {
             attack: 10.0, defense: 0.0, speed: 0.0,
             rarity: crate::plugins::items::ItemRarity::Common,
             price: 10,
+            description: "".to_string(),
         };
 
         let whetstone = ItemDefinition {
@@ -1129,12 +1477,14 @@ mod tests {
                 SynergyDefinition {
                     offset: IVec2::new(1, 0),
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_hint: SynergyVisualHint::None
                 }
             ],
             attack: 0.0, defense: 0.0, speed: 0.0,
             rarity: crate::plugins::items::ItemRarity::Common,
             price: 5,
+            description: "".to_string(),
         };
 
         // Add "starter_bag" for test context since PersistentInventory now defaults to it
@@ -1148,6 +1498,7 @@ mod tests {
             attack: 0.0, defense: 0.0, speed: 0.0,
             rarity: crate::plugins::items::ItemRarity::Common,
             price: 0,
+            description: "".to_string(),
         };
         // We need to auto-generate shape for starter_bag manually as load_items isn't running
         let mut bag_with_shape = starter_bag.clone();

@@ -62,34 +62,6 @@ fn on_enter_shop(
     shop_state.reroll_cost = 1;
     shop_state.reroll_count = 0;
 
-    // Generate initial shop items (respecting locks would happen if we persisted ShopState between rounds,
-    // but typically ShopState is refreshed per round.
-    // However, the prompt says "Lock item... prevents replacement".
-    // This implies ShopState should persist or we need to handle "next round generation" carefully.
-    // For now, let's assume if items are empty, we generate. If not empty (from previous round?), we respect locks?
-    // Actually, "EveningPhase" is the shop phase. When we enter it, we are starting a shopping session.
-    // If we come from "DayPhase", it's a new round.
-    // If we come from "NightPhase" (after combat), it might be the same round or next?
-    // Typically: Shop -> Combat -> Shop (Next Round).
-    // So on Enter EveningPhase, we should refresh the shop.
-
-    // Let's implement generation logic.
-    // We need to keep locked items.
-    let mut new_items: Vec<ShopItem> = Vec::new();
-
-    // Check if we have existing items (from previous round)
-    // If shop_state.items is empty, we just generate 5.
-    // If not empty, we keep locked ones.
-
-    // BUT: On first load, it is empty.
-    // On subsequent rounds, we might want to keep locked items.
-    // However, `ShopState` is a Resource, so it persists.
-
-    // We need to know if this is a "New Round".
-    // GlobalTime.day increments. We can use that?
-    // Let's assume OnEnter EveningPhase is always a "new shopping session".
-    // We should probably clear non-locked items and refill.
-
     let round = global_time.day;
 
     // Identify indices of locked items
@@ -153,7 +125,7 @@ pub fn generate_shop_items(
                  is_sold: false,
              });
         } else {
-            // Fallback if no item of rarity found (e.g. no Unique items defined yet)
+             // Fallback if no item of rarity found (e.g. no Unique items defined yet)
              // Try Common
              if let Some(fallback) = item_db.items.values().filter(|i| i.rarity == ItemRarity::Common).next() {
                   results.push(ShopItem {

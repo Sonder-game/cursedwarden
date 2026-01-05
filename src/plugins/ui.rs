@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use crate::plugins::metagame::{PlayerStats, GlobalTime};
 use crate::plugins::core::GameState;
+use crate::plugins::items::ItemDefinition;
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_hud)
-           .add_systems(Update, update_hud);
+           .add_systems(Update, (update_hud, tooltip_system));
     }
 }
 
@@ -18,6 +19,13 @@ struct PhaseText;
 #[derive(Component)]
 struct StatsText;
 
+// Tooltip Marker
+#[derive(Component)]
+struct TooltipNode;
+
+#[derive(Component)]
+struct TooltipText;
+
 fn spawn_hud(mut commands: Commands) {
     // Root UI Node (Overlay)
     commands.spawn((
@@ -27,10 +35,6 @@ fn spawn_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             justify_content: JustifyContent::SpaceBetween,
             flex_direction: FlexDirection::Column,
-            // pointer_events removed, using PickingBehavior if needed or default.
-            // Bevy 0.15 defaults to passing through if no interaction components?
-            // Actually, Node blocks clicks by default in picking.
-            // We need PickingBehavior::Ignore.
             ..default()
         },
         PickingBehavior::IGNORE,
@@ -86,7 +90,7 @@ fn spawn_hud(mut commands: Commands) {
         ))
         .with_children(|bottom_bar| {
              bottom_bar.spawn((
-                Text::new("Controls: [Space] Spawn Item (Eve) | [T] Next Phase | [F5] Save | [F9] Load | [Drag] Move Items"),
+                Text::new("Controls: [Space] Spawn Item (Eve) | [T] Next Phase | [F5] Save | [F9] Load | [Drag] Move Items | [Alt] Tooltips"),
                 TextFont {
                     font_size: 14.0,
                     ..default()
@@ -94,9 +98,6 @@ fn spawn_hud(mut commands: Commands) {
                 TextColor(Color::srgb(0.8, 0.8, 0.8)),
             ));
 
-             // Start Combat Button (Visible in Evening Only - Logic below needs to handle visibility, or we spawn it dynamically elsewhere.
-             // For simplicity, let's spawn it here but toggle visibility in update_hud, or just add a button that is always there but only works in Evening?
-             // Better: Add a distinct UI element for the button.)
              bottom_bar.spawn((
                  Button,
                  Node {
@@ -119,13 +120,37 @@ fn spawn_hud(mut commands: Commands) {
              });
         });
     });
+
+    // Spawn hidden Tooltip
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            padding: UiRect::all(Val::Px(10.0)),
+            border: UiRect::all(Val::Px(2.0)),
+            display: Display::None, // Hidden by default
+            flex_direction: FlexDirection::Column,
+            max_width: Val::Px(300.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.1, 0.1, 0.1).with_alpha(0.95)),
+        BorderColor(Color::WHITE),
+        TooltipNode,
+        ZIndex(300), // Topmost
+        PickingBehavior::IGNORE,
+    )).with_children(|parent| {
+        parent.spawn((
+            Text::new("Tooltip"),
+            TextFont { font_size: 14.0, ..default() },
+            TextColor(Color::WHITE),
+            TooltipText
+        ));
+    });
 }
 
 #[derive(Component)]
 struct StartCombatButton;
 
 fn update_hud(
-    // Removed unused mut commands
     state: Res<State<GameState>>,
     player_stats: Res<PlayerStats>,
     time: Res<GlobalTime>,
@@ -170,6 +195,56 @@ fn update_hud(
                 info!("Starting Combat!");
                 next_state.set(GameState::NightPhase);
             }
+        }
+    }
+}
+
+fn tooltip_system(
+    mut q_tooltip: Query<(&mut Node, &mut Display), With<TooltipNode>>,
+    mut q_text: Query<&mut Text, With<TooltipText>>,
+    q_interacted: Query<(&Interaction, &ItemDefinition, &GlobalTransform), With<crate::plugins::inventory::Item>>,
+    input: Res<ButtonInput<KeyCode>>,
+    q_window: Query<&Window>,
+) {
+    let show_tooltip = input.pressed(KeyCode::AltLeft) || input.pressed(KeyCode::AltRight);
+
+    if let Ok((mut node, mut display)) = q_tooltip.get_single_mut() {
+        if !show_tooltip {
+             *display = Display::None;
+             return;
+        }
+
+        // Find hovered item
+        let mut found = false;
+        if let Ok(window) = q_window.get_single() {
+             if let Some(cursor_pos) = window.cursor_position() {
+                 // Simple hover check from interaction
+                 for (interaction, def, transform) in q_interacted.iter() {
+                     if *interaction == Interaction::Hovered {
+                          found = true;
+                          *display = Display::Flex;
+
+                          // Position tooltip near cursor
+                          node.left = Val::Px(cursor_pos.x + 15.0);
+                          node.top = Val::Px(cursor_pos.y + 15.0);
+
+                          if let Ok(mut text) = q_text.get_single_mut() {
+                              let mut content = format!("{}\n\n{}", def.name, def.description);
+                              if def.attack > 0.0 { content.push_str(&format!("\nAttack: {}", def.attack)); }
+                              if def.defense > 0.0 { content.push_str(&format!("\nDefense: {}", def.defense)); }
+                              if def.speed != 0.0 { content.push_str(&format!("\nSpeed: {}", def.speed)); }
+                              content.push_str(&format!("\nRarity: {:?}\nPrice: {}", def.rarity, def.price));
+
+                              **text = content;
+                          }
+                          break;
+                     }
+                 }
+             }
+        }
+
+        if !found {
+            *display = Display::None;
         }
     }
 }

@@ -36,6 +36,9 @@ pub struct ItemDefinition {
     pub price: u32,
 
     #[serde(default)]
+    pub description: String,
+
+    #[serde(default)]
     pub tags: Vec<ItemTag>,
 
     #[serde(default)]
@@ -77,6 +80,19 @@ pub enum ItemTag {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub enum SynergyVisualHint {
+    Star,
+    Diamond,
+    None
+}
+
+impl Default for SynergyVisualHint {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SynergyDefinition {
     // Relative coordinate from item pivot (0,0)
     // Note: This needs to rotate with the item
@@ -84,6 +100,8 @@ pub struct SynergyDefinition {
     // If the item at 'offset' has ANY of these tags, the effect triggers
     pub target_tags: Vec<ItemTag>,
     pub effect: SynergyEffect,
+    #[serde(default)]
+    pub visual_hint: SynergyVisualHint,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +167,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Weapon,
             rarity: ItemRarity::Common,
             price: 5,
+            description: "A basic sword. Deals damage.".to_string(),
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 10.0,
@@ -165,6 +184,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Weapon,
             rarity: ItemRarity::Rare,
             price: 7,
+            description: "A fast dagger made of silver.".to_string(),
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 8.0,
@@ -181,6 +201,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Consumable,
             rarity: ItemRarity::Common,
             price: 3,
+            description: "Restores health on use.".to_string(),
             tags: vec![ItemTag::Potion],
             synergies: vec![],
             attack: 0.0,
@@ -197,27 +218,32 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Consumable,
             rarity: ItemRarity::Common,
             price: 4,
+            description: "Sharpening stone. Buffs adjacent weapons.".to_string(),
             tags: vec![ItemTag::Valuable],
             synergies: vec![
                 SynergyDefinition {
                     offset: IVec2::new(1, 0), // Right
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_hint: SynergyVisualHint::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(-1, 0), // Left
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_hint: SynergyVisualHint::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(0, 1), // Top
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_hint: SynergyVisualHint::Star,
                 },
                 SynergyDefinition {
                     offset: IVec2::new(0, -1), // Bottom
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_hint: SynergyVisualHint::Star,
                 }
             ],
             attack: 0.0,
@@ -235,6 +261,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Weapon,
             rarity: ItemRarity::Epic,
             price: 12,
+            description: "A heavy shield providing great defense.".to_string(),
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 2.0,
@@ -251,6 +278,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Weapon,
             rarity: ItemRarity::Legendary,
             price: 25,
+            description: "A bow of legends. High speed and damage.".to_string(),
             tags: vec![ItemTag::Weapon],
             synergies: vec![],
             attack: 15.0,
@@ -267,6 +295,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
              item_type: ItemType::Consumable,
              rarity: ItemRarity::Unique,
              price: 50,
+             description: "A one-of-a-kind charm.".to_string(),
              tags: vec![ItemTag::Valuable],
              synergies: vec![],
              attack: 0.0,
@@ -284,6 +313,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Bag,
             rarity: ItemRarity::Common, // Not in shop typically
             price: 0,
+            description: "Basic storage.".to_string(),
             tags: vec![],
             synergies: vec![],
             attack: 0.0,
@@ -300,6 +330,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Bag,
             rarity: ItemRarity::Common,
             price: 4,
+            description: "Expands inventory space.".to_string(),
             tags: vec![],
             synergies: vec![],
             attack: 0.0,
@@ -316,6 +347,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Bag,
             rarity: ItemRarity::Rare,
             price: 6,
+            description: "A small pouch. Faster activation.".to_string(),
             tags: vec![],
             synergies: vec![
                  // Example synergy: Speed up items inside? For now placeholder.
@@ -334,6 +366,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Bag,
             rarity: ItemRarity::Epic,
             price: 8,
+            description: "Holds potions securely.".to_string(),
             tags: vec![],
             synergies: vec![],
             attack: 0.0,
@@ -350,12 +383,48 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
             item_type: ItemType::Bag,
             rarity: ItemRarity::Rare,
             price: 5,
+            description: "Restores stamina on activation.".to_string(),
             tags: vec![],
             synergies: vec![],
             attack: 0.0,
             defense: 0.0,
             speed: 0.0,
         },
+        // Result items
+        ItemDefinition {
+            id: "hero_sword".to_string(),
+            name: "Hero Sword".to_string(),
+            width: 1,
+            height: 2,
+            shape: vec![],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Epic,
+            price: 15,
+            description: "A sword forged by heroes.".to_string(),
+            tags: vec![ItemTag::Weapon],
+            synergies: vec![],
+            attack: 18.0,
+            defense: 0.0,
+            speed: 2.0,
+        },
+        ItemDefinition {
+            id: "strong_health_potion".to_string(),
+            name: "Strong Potion".to_string(),
+            width: 1,
+            height: 1,
+            shape: vec![],
+            material: MaterialType::Flesh,
+            item_type: ItemType::Consumable,
+            rarity: ItemRarity::Rare,
+            price: 6,
+            description: "Restores a lot of health.".to_string(),
+            tags: vec![ItemTag::Potion],
+            synergies: vec![],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        }
     ];
 
     // Auto-generate rectangular shapes if empty
@@ -379,7 +448,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
     item_db.recipes = vec![
         RecipeDefinition {
             ingredients: vec!["steel_sword".to_string(), "whetstone".to_string()],
-            result: "hero_sword".to_string(), // Need to define this item if we want it to work fully
+            result: "hero_sword".to_string(),
             catalysts: vec![],
         },
         RecipeDefinition {
