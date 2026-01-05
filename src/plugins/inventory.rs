@@ -545,10 +545,14 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
         ))
         .with_children(|parent| {
             // Inventory Grid Container
+            // IMPORTANT: We cannot use standard Grid Layout for non-rectangular shapes easily
+            // if we want to visualize "holes".
+            // However, we can keep the 12x12 container but only spawn visible children in valid slots.
             parent.spawn((
                 InventoryGridContainer,
                 Node {
                     display: Display::Grid,
+                    // Use standard 12x12 grid template for layout stability
                     grid_template_columns: vec![GridTrack::px(50.0); grid_state.width as usize],
                     grid_template_rows: vec![GridTrack::px(50.0); grid_state.height as usize],
                     row_gap: Val::Px(2.0),
@@ -558,7 +562,7 @@ fn spawn_inventory_ui(mut commands: Commands, mut grid_state: ResMut<InventoryGr
                     position_type: PositionType::Relative,
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+                BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.1)), // Semi-transparent bg
             ));
         });
 
@@ -586,26 +590,27 @@ fn update_inventory_slots(
                     let pos = IVec2::new(x, y);
                     let is_valid = grid_state.grid.contains_key(&pos);
 
-                    // Only spawn valid slots? Or spawn all for grid structure?
-                    // We spawn all for grid alignment (CSS Grid needs cells to fill gaps).
+                    // We spawn a node for EVERY slot to maintain grid structure (CSS Grid cell alignment)
+                    // But we make invalid slots invisible/transparent
 
                     let bg_color = if is_valid {
                         Color::srgb(0.3, 0.3, 0.3)
                     } else {
-                        Color::srgba(0.1, 0.1, 0.1, 0.2) // Very transparent for invalid
+                        Color::NONE // Invisible
                     };
 
                     let border_color = if is_valid {
                         Color::BLACK
                     } else {
-                        Color::srgba(0.0, 0.0, 0.0, 0.1)
+                        Color::NONE
                     };
 
+                    // Only render valid slots with distinct style
                     grid_parent.spawn((
                         Node {
                             width: Val::Px(50.0),
                             height: Val::Px(50.0),
-                            border: UiRect::all(Val::Px(1.0)),
+                            border: if is_valid { UiRect::all(Val::Px(1.0)) } else { UiRect::default() },
                             ..default()
                         },
                         BackgroundColor(bg_color),
@@ -655,21 +660,50 @@ fn load_inventory_state(
     q_container: Query<Entity, With<InventoryGridContainer>>,
 ) {
     if let Ok(container) = q_container.get_single() {
+
+        // Pass 1: Bags (Critical to establish grid)
         for saved_item in &persistent_inventory.items {
             if let Some(def) = item_db.items.get(&saved_item.item_id) {
-                 let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+                if def.item_type == ItemType::Bag {
+                    let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+                    // Force spawn bag without validation (assumed valid from save),
+                    // or validate if we want to be safe.
+                    // For Bags, we don't check 'can_place_item' (which checks for slots),
+                    // we check 'can_place_bag'.
+                    if grid_state.can_place_bag(&def.shape, pos, saved_item.rotation, None) {
+                        spawn_item_entity(
+                            &mut commands,
+                            container,
+                            def,
+                            pos,
+                            saved_item.rotation,
+                            &mut grid_state
+                        );
+                    } else {
+                         warn!("Could not restore bag {} at {:?}: Invalid placement", def.name, pos);
+                    }
+                }
+            }
+        }
 
-                 if grid_state.can_place_item(&def.shape, pos, saved_item.rotation, None) {
-                     spawn_item_entity(
-                         &mut commands,
-                         container,
-                         def,
-                         pos,
-                         saved_item.rotation,
-                         &mut grid_state
-                     );
-                 } else {
-                     warn!("Could not restore item {} at {:?}: Space occupied", def.name, pos);
+        // Pass 2: Items
+        for saved_item in &persistent_inventory.items {
+            if let Some(def) = item_db.items.get(&saved_item.item_id) {
+                 if def.item_type != ItemType::Bag {
+                     let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
+
+                     if grid_state.can_place_item(&def.shape, pos, saved_item.rotation, None) {
+                         spawn_item_entity(
+                             &mut commands,
+                             container,
+                             def,
+                             pos,
+                             saved_item.rotation,
+                             &mut grid_state
+                         );
+                     } else {
+                         warn!("Could not restore item {} at {:?}: Space occupied", def.name, pos);
+                     }
                  }
             }
         }
@@ -687,19 +721,30 @@ fn consume_pending_items(
         for item_key in pending_items.0.drain(..) {
              if let Some(def) = item_db.items.get(&item_key) {
 
-                 // Find free spot
-                 if let Some(pos) = grid_state.find_free_spot(def) {
-                     spawn_item_entity(
-                         &mut commands,
-                         container,
-                         def,
-                         pos,
-                         0,
-                         &mut grid_state
-                     );
-                     info!("Consumed pending item {} at {:?}", def.name, pos);
+                 // If it's a bag, try place bag
+                 if def.item_type == ItemType::Bag {
+                      // Simple logic: find free spot for bag?
+                      // Bags need adjacency.
+                      // This is complex. For now, try (0,0)?
+                      // Or scan grid.
+                      // TODO: Implement 'find_bag_spot'
+                      // For now, fail if bag
+                      warn!("Auto-placing bags from city not fully implemented yet.");
                  } else {
-                     warn!("No space for pending item {}", def.name);
+                     // Find free spot
+                     if let Some(pos) = grid_state.find_free_spot(def) {
+                         spawn_item_entity(
+                             &mut commands,
+                             container,
+                             def,
+                             pos,
+                             0,
+                             &mut grid_state
+                         );
+                         info!("Consumed pending item {} at {:?}", def.name, pos);
+                     } else {
+                         warn!("No space for pending item {}", def.name);
+                     }
                  }
             } else {
                 warn!("Unknown item id: {}", item_key);
@@ -731,6 +776,14 @@ pub fn spawn_item_entity(
      let left = 10.0 + effective_x as f32 * 52.0;
      let top = 10.0 + effective_y as f32 * 52.0;
 
+     let is_bag = def.item_type == ItemType::Bag;
+
+     // Bags: Lower Z-Index, Different color
+     // Items: Higher Z-Index
+     let z_idx = if is_bag { ZIndex(1) } else { ZIndex(10) };
+     let color = if is_bag { Color::srgb(0.4, 0.2, 0.1) } else { Color::srgb(0.5, 0.5, 0.8) };
+     let border_col = if is_bag { Color::NONE } else { Color::WHITE };
+
      let item_entity = commands.spawn((
         Node {
             width: Val::Px(width_px),
@@ -741,14 +794,15 @@ pub fn spawn_item_entity(
             border: UiRect::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(Color::srgb(0.5, 0.5, 0.8)),
-        BorderColor(Color::WHITE),
+        BackgroundColor(color),
+        BorderColor(border_col),
         Interaction::default(),
         Item,
         GridPosition { x: pos.x, y: pos.y },
         ItemSize { width: width_slots, height: height_slots },
         ItemRotation { value: rotation },
         ActiveSynergies::default(),
+        z_idx,
         def.clone(),
     ))
     .with_children(|parent| {
@@ -774,12 +828,20 @@ pub fn spawn_item_entity(
     .observe(handle_drag_end)
     .id();
 
-    // Add to grid state
-    let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
-    for offset in rotated_shape {
-        let cell_pos = pos + offset;
-        if let Some(cell) = grid_state.grid.get_mut(&cell_pos) {
-            cell.state = CellState::Occupied(item_entity);
+    // Logic Update
+    if is_bag {
+        // Update Bags Map
+        grid_state.bags.insert(item_entity, (pos, rotation, def.clone()));
+        // Update Grid Slots (Recalculate all)
+        grid_state.recalculate_grid();
+    } else {
+        // Occupy Grid Slots
+        let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation);
+        for offset in rotated_shape {
+            let cell_pos = pos + offset;
+            if let Some(cell) = grid_state.grid.get_mut(&cell_pos) {
+                cell.state = CellState::Occupied(item_entity);
+            }
         }
     }
 
@@ -906,6 +968,7 @@ fn handle_drag_drop(
     trigger: Trigger<Pointer<DragDrop>>,
     mut commands: Commands,
     mut q_item: Query<(&mut ZIndex, &mut Node, &mut ItemRotation, &mut ItemSize, &mut GridPosition, &ItemDefinition), With<Item>>,
+    q_all_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition), With<Item>>,
     q_original: Query<&DragOriginalPosition>,
     mut grid_state: ResMut<InventoryGridState>,
 ) {
@@ -937,32 +1000,26 @@ fn handle_drag_drop(
             if grid_state.can_place_bag(&def.shape, target_pos, rotation.value, Some(entity)) {
                 // Update Bag List
                 grid_state.bags.insert(entity, (target_pos, rotation.value, def.clone()));
-                // Recalculate Slots
+                // Recalculate Slots (clears occupancy)
                 grid_state.recalculate_grid();
 
-                // Re-occupy slots for all OTHER items?
-                // WARNING: Rebuilding grid clears occupancy. We need to restore it.
-                // We should iterate all items (query?) or track them in grid_state?
-                // GridState only tracks Occupied(Entity).
-                // We need to re-apply all item positions.
-                // Since we don't have easy access to all Item components here (except by query),
-                // we might need to rely on the fact that items haven't moved, only grid availability changed.
+                // Re-occupy slots for all OTHER items to restore sync
+                for (other_entity, other_pos, other_rot, other_def) in q_all_items.iter() {
+                    // Skip self (we will update self position later in this block)
+                    if other_entity == entity { continue; }
+                    // Skip other bags (they don't occupy slots, they provide them)
+                    if other_def.item_type == ItemType::Bag { continue; }
 
-                // Hack: We need to re-mark occupied cells for EXISTING items.
-                // But we lost the mapping "Where are the items?".
-                // Better approach: `recalculate_grid` should NOT clear occupancy if the cell still exists?
-                // Or: We iterate `q_item` (all items) to re-fill grid.
-                // But `q_item` query in `handle_drag_drop` only gets the DRAGGED item.
-                // We need a separate query for all items to restore grid state properly.
+                    let shape = InventoryGridState::get_rotated_shape(&other_def.shape, other_rot.value);
+                    let other_grid_pos = IVec2::new(other_pos.x, other_pos.y);
 
-                // Since we can't easily add a new query param to this observer without changing signature,
-                // let's assume `recalculate_grid` preserves occupancy if possible?
-                // No, `recalculate_grid` clears `grid`.
-
-                // ALTERNATIVE: Don't use `recalculate_grid` in `handle_drag_drop` directly if we can't restore items.
-                // OR: Add a system `update_grid_occupancy` that runs every frame or on change?
-                // Let's rely on a reactive system or...
-                // Actually, `handle_drag_drop` is an observer.
+                    for offset in shape {
+                        let cell_pos = other_grid_pos + offset;
+                        if let Some(cell) = grid_state.grid.get_mut(&cell_pos) {
+                            cell.state = CellState::Occupied(other_entity);
+                        }
+                    }
+                }
 
                 success = true;
             }
@@ -1090,57 +1147,7 @@ mod tests {
             price: 5,
         };
 
-        item_db.items.insert("sword".to_string(), sword);
-        item_db.items.insert("whetstone".to_string(), whetstone);
-
-        let mut inv = PersistentInventory::default();
-        // Note: PersistentInventory::default() now includes the Starter Bag at (2,2).
-        // `calculate_combat_stats` calls `from_persistent` which processes ALL items in `inv.items`.
-        // BUT `from_persistent` iterates `inv.items` and calls `can_place_item`?
-        // Wait, `from_persistent` in `inventory.rs` assumes everything is an item unless we changed it.
-        // We did NOT update `from_persistent` to handle Bags properly!
-        // `from_persistent` iterates items, checks if they are bags?
-        // Currently `from_persistent` just inserts `Occupied` state. It does NOT update `bags` map.
-        // This is why the test fails: The grid is never populated with slots because `bags` map is empty in the test simulation!
-
-        // We must update `from_persistent` to populate `bags` map if the item is a bag.
-
-        // Test Setup:
-        // Use coordinates within the default backpack (x: 1..7, y: 2..6)
-        // With Bag System, we need a Bag to make these slots valid!
-        // Default PersistentInventory has a Starter Bag at (2,2).
-        // Starter Bag is 3x3 at (2,2) -> covers (2,2) to (4,4).
-        // Sword at (2,2) is OK. Whetstone at (1,2) is OUT OF BOUNDS of the Starter Bag!
-        // We must move Whetstone to be inside the bag.
-        // Let's put Whetstone at (3,2).
-        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 3, grid_y: 2, rotation: 0 });
-        inv.items.push(SavedItem { item_id: "sword".to_string(), grid_x: 2, grid_y: 2, rotation: 0 });
-
-        // Add a Starter Bag to the persistent inventory manually for the test context
-        // Because `calculate_combat_stats` calls `from_persistent` which starts with a default (which includes the bag)
-        // BUT `from_persistent` overwrites the default state with what's in `inv`?
-        // Let's check `from_persistent`: `let mut state = Self::default();`.
-        // `Self::default()` has `bags` EMPTY. The default starter bag logic was moved to `PersistentInventory::default()`, not `InventoryGridState::default()`.
-        // So `state.bags` is empty.
-        // We iterate `inventory.items` (which is `inv`).
-        // `inv` created via `PersistentInventory::default()` HAS the starter bag.
-        // `inv.items.push` ADDS to it.
-        // So `inv` has: [StarterBag, Whetstone, Sword].
-
-        // Wait, `PersistentInventory::default()`:
-        // items: vec![ SavedItem { item_id: "starter_bag"... } ]
-
-        // So `inv` has starter bag.
-        // `from_persistent` iterates. Found "starter_bag".
-        // `item_db` has "starter_bag"? We need to check if `item_db` in test has "starter_bag".
-        // The test manually builds `item_db`. It inserts "sword" and "whetstone".
-        // IT DOES NOT INSERT "starter_bag"!
-        // So "starter_bag" lookup fails, bag is not added to grid.
-        // So grid is empty.
-        // So items are not placed.
-
-        // Fix: Add "starter_bag" to `item_db` in the test.
-
+        // Add "starter_bag" for test context since PersistentInventory now defaults to it
         let starter_bag = ItemDefinition {
             id: "starter_bag".to_string(),
             name: "Starter Bag".to_string(),
@@ -1156,57 +1163,29 @@ mod tests {
         let mut bag_with_shape = starter_bag.clone();
         for y in 0..3 { for x in 0..3 { bag_with_shape.shape.push(IVec2::new(x,y)); } }
 
+        item_db.items.insert("sword".to_string(), sword);
+        item_db.items.insert("whetstone".to_string(), whetstone);
         item_db.items.insert("starter_bag".to_string(), bag_with_shape);
 
-        let stats = calculate_combat_stats(&inv, &item_db);
-        // Base 10 + 5 from Whetstone synergy
-        // NOTE: Starter Bag definition uses ItemType::Bag.
-        // It provides 3x3 slots at (2,2) -> (2,2) to (4,4).
-        // Whetstone is at (3,2). Sword is at (2,2).
-        // Distance: Whetstone(3,2) - Sword(2,2). dx=1, dy=0.
-        // Whetstone synergy: offset (-1,0) -> (2,2) aka Sword.
-        // Should trigger.
-
-        // Wait, Whetstone synergy definition in this test:
-        // offset: IVec2::new(1, 0), // Right
-        // offset: IVec2::new(1, 0)
-        // From Whetstone (3,2) + (1,0) = (4,2).
-        // Sword is at (2,2).
-        // So Whetstone(3,2) looking Right (4,2) sees nothing.
-        // Whetstone at (3,2) needs to look Left (-1,0) to see Sword at (2,2).
-        // The test defines Whetstone only with (1,0) in the original code?
-        // Let's check the test definition of Whetstone.
-        // It says: offset: IVec2::new(1, 0).
-        // So it buffs item to its RIGHT.
-        // If Whetstone is at (3,2), it buffs (4,2).
-        // Sword is at (2,2).
-        // Sword is to the LEFT of Whetstone.
-        // So synergy fails.
-
-        // Original test setup: Whetstone at (1,2), Sword at (2,2).
-        // Whetstone (1,2) + (1,0) = (2,2) -> Sword. Correct.
-
-        // New setup: Whetstone at (3,2), Sword at (2,2).
-        // Whetstone (3,2) + (1,0) = (4,2) -> Empty.
-
-        // To fix: Place Whetstone to the LEFT of Sword inside the bag.
-        // Bag is 3x3 at (2,2). TopLeft (2,2).
-        // Slots: (2,2), (3,2), (4,2) ...
-        // Sword at (3,2). Whetstone at (2,2).
-        // Whetstone(2,2) + (1,0) -> (3,2) Sword. Correct.
-
-        // Update positions:
-        // Clear previous pushes
+        let mut inv = PersistentInventory::default();
+        // Clear default starter bag to ensure we set up test exactly as needed
         inv.items.clear();
-        // Re-add bag (already in default? No, I cleared it).
+
+        // Place Bag at (2,2) -> Covers (2,2) to (4,4)
         inv.items.push(SavedItem { item_id: "starter_bag".to_string(), grid_x: 2, grid_y: 2, rotation: 0 });
-        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 2, grid_y: 2, rotation: 0 });
+
+        // Place Items
+        // Sword at (3,2) (Inside bag)
         inv.items.push(SavedItem { item_id: "sword".to_string(), grid_x: 3, grid_y: 2, rotation: 0 });
+        // Whetstone at (2,2) (Inside bag)
+        inv.items.push(SavedItem { item_id: "whetstone".to_string(), grid_x: 2, grid_y: 2, rotation: 0 });
+
+        // Synergy: Whetstone at (2,2) with Offset (1,0) looks at (3,2).
+        // (3,2) has Sword. Synergy triggers.
 
         let stats = calculate_combat_stats(&inv, &item_db);
-        assert_eq!(stats.attack, 15.0);
+        assert_eq!(stats.attack, 15.0); // 10 Base + 5 Bonus
 
-        // Also verify the combat entities snapshot
         let sword_entity = stats.combat_entities.iter().find(|e| e.item_id == "sword").unwrap();
         assert_eq!(sword_entity.final_stats.get(&StatType::Attack), Some(&15.0));
     }
