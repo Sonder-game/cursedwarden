@@ -66,6 +66,27 @@ impl Default for ItemRarity {
     }
 }
 
+impl Default for ItemDefinition {
+    fn default() -> Self {
+        Self {
+            id: "default_item".to_string(),
+            name: "Default Item".to_string(),
+            width: 1,
+            height: 1,
+            shape: vec![IVec2::new(0, 0)],
+            material: MaterialType::Steel,
+            item_type: ItemType::Weapon,
+            rarity: ItemRarity::Common,
+            price: 0,
+            tags: vec![],
+            synergies: vec![],
+            attack: 0.0,
+            defense: 0.0,
+            speed: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Hash)]
 pub enum ItemTag {
     Weapon,
