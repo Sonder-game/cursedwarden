@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
-use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType, ItemType};
+use crate::plugins::items::{ItemDatabase, ItemDefinition, SynergyEffect, StatType, ItemType, SynergyVisualType};
 use crate::plugins::metagame::{PersistentInventory, SavedItem};
 use rand::Rng;
 
@@ -10,9 +10,20 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InventoryGridState>()
-           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, consume_pending_items).chain())
+           .init_resource::<PendingCrafts>()
+           .add_systems(OnEnter(GameState::EveningPhase), (spawn_inventory_ui, apply_deferred, load_inventory_state, apply_deferred, execute_crafts_system, consume_pending_items).chain())
            .add_systems(OnExit(GameState::EveningPhase), (save_inventory_state, cleanup_inventory_ui).chain())
-           .add_systems(Update, (resize_item_system, debug_spawn_item_system, rotate_item_input_system, synergy_system, visualize_synergy_system, update_inventory_slots).run_if(in_state(GameState::EveningPhase)))
+           .add_systems(Update, (
+               resize_item_system,
+               debug_spawn_item_system,
+               rotate_item_input_system,
+               synergy_system,
+               visualize_synergy_system,
+               update_inventory_slots,
+               update_drag_ghost_system, // Ghost Step 7
+               draw_inventory_links_system, // Links Step 4
+               check_recipes_system, // Crafting Step 4
+           ).run_if(in_state(GameState::EveningPhase)))
            .add_systems(OnEnter(GameState::NightPhase), crate::plugins::mutation::mutation_system)
            .add_observer(attach_drag_observers);
     }
@@ -84,6 +95,17 @@ pub struct InventoryGridState {
    pub bags: HashMap<Entity, (IVec2, u8, ItemDefinition)>,
    pub width: i32,
    pub height: i32,
+}
+
+#[derive(Resource, Default)]
+pub struct PendingCrafts {
+    pub recipes_to_execute: Vec<PendingCraft>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingCraft {
+    pub result_id: String,
+    pub ingredients: Vec<Entity>,
 }
 
 impl Default for InventoryGridState {
@@ -510,6 +532,260 @@ fn synergy_system(
             }
         }
     }
+}
+
+// Step 7: Ghost Visualization System
+fn update_drag_ghost_system(
+    mut q_slots: Query<(&InventorySlot, &mut BackgroundColor)>,
+    q_dragged: Query<(Entity, &Node, &ItemRotation, &ItemDefinition), With<DragOriginalPosition>>,
+    grid_state: Res<InventoryGridState>,
+) {
+    // 1. Reset Colors to Default
+    for (slot, mut bg_color) in q_slots.iter_mut() {
+        // Only valid slots exist as entities
+        *bg_color = BackgroundColor(Color::srgb(0.3, 0.3, 0.3));
+    }
+
+    // 2. If Dragging, Color overlay
+    if let Ok((entity, node, rotation, def)) = q_dragged.get_single() {
+         let mut left_val = 0.0;
+         let mut top_val = 0.0;
+         if let Val::Px(l) = node.left { left_val = l; }
+         if let Val::Px(t) = node.top { top_val = t; }
+
+         let padding = 10.0;
+         let stride = 52.0;
+
+         let (min_x, min_y, _, _) = InventoryGridState::calculate_bounding_box(&def.shape, rotation.value);
+
+         let estimated_pivot_x = ((left_val - padding) / stride).round() as i32 - min_x;
+         let estimated_pivot_y = ((top_val - padding) / stride).round() as i32 - min_y;
+
+         let target_pos = IVec2::new(estimated_pivot_x, estimated_pivot_y);
+         let is_bag = def.item_type == ItemType::Bag;
+
+         // Check validity
+         let is_valid = if is_bag {
+             grid_state.can_place_bag(&def.shape, target_pos, rotation.value, Some(entity))
+         } else {
+             grid_state.can_place_item(&def.shape, target_pos, rotation.value, Some(entity))
+         };
+
+         let highlight_color = if is_valid {
+             Color::srgba(0.0, 1.0, 0.0, 0.3) // Green
+         } else {
+             Color::srgba(1.0, 0.0, 0.0, 0.3) // Red
+         };
+
+         let rotated_shape = InventoryGridState::get_rotated_shape(&def.shape, rotation.value);
+
+         // Apply color to target slots
+         for offset in rotated_shape {
+             let slot_pos = target_pos + offset;
+             for (slot, mut bg_color) in q_slots.iter_mut() {
+                 if slot.x == slot_pos.x && slot.y == slot_pos.y {
+                     *bg_color = BackgroundColor(highlight_color);
+                 }
+             }
+         }
+    }
+}
+
+// Step 4: Crafting & Synergy Lines Visualization
+fn draw_inventory_links_system(
+    mut gizmos: Gizmos,
+    q_items: Query<(Entity, &GridPosition, &ItemRotation, &ItemDefinition)>,
+    grid_state: Res<InventoryGridState>,
+    pending_crafts: Res<PendingCrafts>,
+) {
+    let slot_size = 52.0;
+    let offset_x = 10.0 + 25.0; // Padding + Half Slot
+    let offset_y = 10.0 + 25.0;
+
+    let to_screen = |pos: IVec2| -> Vec2 {
+        Vec2::new(
+             offset_x + pos.x as f32 * slot_size,
+             offset_y + pos.y as f32 * slot_size
+        )
+    };
+
+    // 1. Draw Synergy Lines
+    for (entity, pos, rot, def) in q_items.iter() {
+        if def.synergies.is_empty() { continue; }
+
+        for synergy in &def.synergies {
+             let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], rot.value);
+             if rotated_offset_vec.is_empty() { continue; }
+             let rotated_offset = rotated_offset_vec[0];
+
+             let target_pos = IVec2::new(pos.x, pos.y) + rotated_offset;
+
+             if let Some(cell) = grid_state.grid.get(&target_pos) {
+                 if let CellState::Occupied(target_entity) = cell.state {
+                      // Avoid self-check if somehow mapped
+                      if target_entity == entity { continue; }
+
+                      if let Ok((_, _, _, target_def)) = q_items.get(target_entity) {
+                           if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
+                               // Match! Draw Line.
+                               let start = to_screen(IVec2::new(pos.x, pos.y));
+                               let end = to_screen(target_pos);
+
+                               // Use different color for Star/Diamond if needed
+                               let color = match synergy.visual_type {
+                                   SynergyVisualType::Star => Color::srgba(1.0, 0.8, 0.2, 0.8), // Gold/Orange
+                                   SynergyVisualType::Diamond => Color::srgba(0.2, 0.8, 1.0, 0.8), // Cyan
+                                   _ => Color::srgba(1.0, 1.0, 1.0, 0.5),
+                               };
+                               gizmos.line_2d(start, end, color);
+                           }
+                      }
+                 }
+             }
+        }
+    }
+
+    // 2. Draw Ready Crafting Recipes (Gold Lines from PendingCrafts)
+    for craft in &pending_crafts.recipes_to_execute {
+        if craft.ingredients.len() >= 2 {
+            // Draw lines between ingredients
+            // For 2 items: just one line. For 3+: line to first? or chain?
+            // Backpack battles usually connects neighbors.
+
+            let mut positions = Vec::new();
+            for &entity in &craft.ingredients {
+                if let Ok((_, pos, _, _)) = q_items.get(entity) {
+                    positions.push(to_screen(IVec2::new(pos.x, pos.y)));
+                }
+            }
+
+            // Draw line between 0 and 1
+            if positions.len() >= 2 {
+                 gizmos.line_2d(positions[0], positions[1], Color::srgba(1.0, 0.84, 0.0, 1.0)); // Thick Gold
+                 // Optional: Draw 'pulse' or thickness if Gizmos supported it
+            }
+        }
+    }
+}
+
+// Step 4: Logic - Check Recipes and populate PendingCrafts
+fn check_recipes_system(
+    mut pending_crafts: ResMut<PendingCrafts>,
+    q_items: Query<(Entity, &GridPosition, &ItemDefinition)>,
+    grid_state: Res<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+) {
+    // Only run occasionally? Or every frame is fine for prototype.
+    pending_crafts.recipes_to_execute.clear();
+
+    // Naive DFS/BFS to find connected components matching recipes is hard.
+    // Simplified: Check strict adjacency for 2-ingredient recipes (most common).
+
+    // Track used entities to avoid double counting
+    let mut used_entities: Vec<Entity> = Vec::new();
+
+    for recipe in &item_db.recipes {
+        if recipe.ingredients.len() != 2 { continue; } // Handle 2-part recipes first
+
+        let item1_id = &recipe.ingredients[0];
+        let item2_id = &recipe.ingredients[1];
+
+        // Find all item1s
+        for (e1, pos1, def1) in q_items.iter() {
+            if used_entities.contains(&e1) { continue; }
+            if &def1.id != item1_id { continue; }
+
+            // Check neighbors for item2
+            let neighbors = [
+                IVec2::new(1, 0), IVec2::new(-1, 0), IVec2::new(0, 1), IVec2::new(0, -1)
+            ];
+
+            for n in neighbors {
+                let check_pos = IVec2::new(pos1.x, pos1.y) + n;
+                if let Some(cell) = grid_state.grid.get(&check_pos) {
+                    if let CellState::Occupied(e2) = cell.state {
+                         if used_entities.contains(&e2) { continue; }
+                         if e1 == e2 { continue; }
+
+                         if let Ok((_, _, def2)) = q_items.get(e2) {
+                             if &def2.id == item2_id {
+                                 // Found a match!
+                                 pending_crafts.recipes_to_execute.push(PendingCraft {
+                                     result_id: recipe.result.clone(),
+                                     ingredients: vec![e1, e2],
+                                 });
+                                 used_entities.push(e1);
+                                 used_entities.push(e2);
+                                 break;
+                             }
+                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Execute Crafts (OnEnter Evening)
+fn execute_crafts_system(
+    mut commands: Commands,
+    mut pending_crafts: ResMut<PendingCrafts>,
+    mut grid_state: ResMut<InventoryGridState>,
+    item_db: Res<ItemDatabase>,
+    q_container: Query<Entity, With<InventoryGridContainer>>,
+    q_pos: Query<&GridPosition>,
+) {
+    if let Ok(container) = q_container.get_single() {
+        for craft in &pending_crafts.recipes_to_execute {
+             // 1. Remove ingredients
+             // We need to pick a position for the result. Use the first ingredient's pos.
+             let mut result_pos = IVec2::ZERO;
+             if let Ok(pos) = q_pos.get(craft.ingredients[0]) {
+                 result_pos = IVec2::new(pos.x, pos.y);
+             }
+
+             for entity in &craft.ingredients {
+                 // Clear from grid
+                 // Manual clear to ensure space is free for result in THIS frame
+                 // (despawn is deferred)
+
+                 let mut cells_to_clear = Vec::new();
+                 for (pos, cell) in grid_state.grid.iter() {
+                     if let CellState::Occupied(occupier) = cell.state {
+                         if occupier == *entity {
+                             cells_to_clear.push(*pos);
+                         }
+                     }
+                 }
+                 for pos in cells_to_clear {
+                     if let Some(cell) = grid_state.grid.get_mut(&pos) {
+                         cell.state = CellState::Free;
+                     }
+                 }
+
+                 // Remove entity
+                 commands.entity(*entity).despawn_recursive();
+             }
+
+             // 2. Spawn result
+             if let Some(def) = item_db.items.get(&craft.result_id) {
+                 // Try place at result_pos, if fails, find free spot
+                 if grid_state.can_place_item(&def.shape, result_pos, 0, None) {
+                      spawn_item_entity(&mut commands, container, def, result_pos, 0, &mut grid_state);
+                      info!("Crafted {}!", def.name);
+                 } else if let Some(free_pos) = grid_state.find_free_spot(def) {
+                      spawn_item_entity(&mut commands, container, def, free_pos, 0, &mut grid_state);
+                      info!("Crafted {} (moved)!", def.name);
+                 } else {
+                      warn!("Crafted {} but no space found! (Items lost)", def.name);
+                 }
+             }
+        }
+    }
+    // Clear pending
+    pending_crafts.recipes_to_execute.clear();
+    // Rebuild grid to be safe
+    grid_state.recalculate_grid();
 }
 
 fn resize_item_system(
@@ -1129,7 +1405,8 @@ mod tests {
                 SynergyDefinition {
                     offset: IVec2::new(1, 0),
                     target_tags: vec![ItemTag::Weapon],
-                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 }
+                    effect: SynergyEffect::BuffTarget { stat: StatType::Attack, value: 5.0 },
+                    visual_type: crate::plugins::items::SynergyVisualType::Star,
                 }
             ],
             attack: 0.0, defense: 0.0, speed: 0.0,
@@ -1178,5 +1455,73 @@ mod tests {
 
         let sword_entity = stats.combat_entities.iter().find(|e| e.item_id == "sword").unwrap();
         assert_eq!(sword_entity.final_stats.get(&StatType::Attack), Some(&15.0));
+    }
+
+    #[test]
+    fn test_crafting_logic() {
+         let mut app = App::new();
+         app.add_plugins(MinimalPlugins);
+         app.init_resource::<InventoryGridState>();
+         app.init_resource::<PendingCrafts>();
+         app.init_resource::<ItemDatabase>();
+
+         // Setup DB
+         let mut item_db = app.world_mut().resource_mut::<ItemDatabase>();
+         item_db.items.insert("ing1".to_string(), ItemDefinition {
+             id: "ing1".to_string(), name: "Ing1".to_string(),
+             width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+             material: crate::plugins::items::MaterialType::Steel,
+             item_type: crate::plugins::items::ItemType::Weapon,
+             tags: vec![], synergies: vec![],
+             attack: 0.0, defense: 0.0, speed: 0.0, rarity: crate::plugins::items::ItemRarity::Common, price: 0
+         });
+         item_db.items.insert("ing2".to_string(), ItemDefinition {
+             id: "ing2".to_string(), name: "Ing2".to_string(),
+             width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+             material: crate::plugins::items::MaterialType::Steel,
+             item_type: crate::plugins::items::ItemType::Weapon,
+             tags: vec![], synergies: vec![],
+             attack: 0.0, defense: 0.0, speed: 0.0, rarity: crate::plugins::items::ItemRarity::Common, price: 0
+         });
+         item_db.items.insert("result".to_string(), ItemDefinition {
+             id: "result".to_string(), name: "Result".to_string(),
+             width: 1, height: 1, shape: vec![IVec2::new(0,0)],
+             material: crate::plugins::items::MaterialType::Steel,
+             item_type: crate::plugins::items::ItemType::Weapon,
+             tags: vec![], synergies: vec![],
+             attack: 0.0, defense: 0.0, speed: 0.0, rarity: crate::plugins::items::ItemRarity::Common, price: 0
+         });
+         item_db.recipes.push(crate::plugins::items::RecipeDefinition {
+             ingredients: vec!["ing1".to_string(), "ing2".to_string()],
+             result: "result".to_string(),
+             catalysts: vec![],
+         });
+
+         // Spawn Items manually (mocking ECS)
+         let e1 = app.world_mut().spawn((
+             Item,
+             GridPosition { x: 0, y: 0 },
+             ItemDefinition { id: "ing1".to_string(), ..default() } // Simplified
+         )).id();
+
+         let e2 = app.world_mut().spawn((
+             Item,
+             GridPosition { x: 1, y: 0 },
+             ItemDefinition { id: "ing2".to_string(), ..default() }
+         )).id();
+
+         // Update Grid State manually
+         let mut grid = app.world_mut().resource_mut::<InventoryGridState>();
+         grid.grid.insert(IVec2::new(0,0), Cell { state: CellState::Occupied(e1) });
+         grid.grid.insert(IVec2::new(1,0), Cell { state: CellState::Occupied(e2) });
+
+         // Run Check System
+         app.add_systems(Update, check_recipes_system);
+         app.update();
+
+         // Check Pending
+         let pending = app.world().resource::<PendingCrafts>();
+         assert_eq!(pending.recipes_to_execute.len(), 1);
+         assert_eq!(pending.recipes_to_execute[0].result_id, "result");
     }
 }
