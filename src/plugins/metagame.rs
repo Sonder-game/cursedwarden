@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::plugins::items::ItemDefinition;
 
 #[derive(Resource, Debug, Serialize, Deserialize, Clone)]
 pub struct SaveData {
@@ -52,7 +51,7 @@ impl Default for GlobalTime {
 
 // Plugin
 use crate::plugins::core::{GameState, DaySubState};
-use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemRotation, InventoryItem, spawn_item_entity, InventoryGridContainer, SlotData};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemRotation, InventoryItem, spawn_item_entity, InventoryGridContainer};
 use crate::plugins::items::{ItemDatabase, ItemType};
 use std::fs::File;
 use std::io::{Write, Read};

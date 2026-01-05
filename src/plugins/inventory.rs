@@ -254,7 +254,7 @@ pub fn spawn_item_entity(
     rotation: u8,
     _grid_state: &mut InventoryGridState, // Note: Not used directly for validation here to avoid ownership issues, but kept signature
 ) {
-    let (min_x, min_y, width_slots, height_slots) = calculate_bounding_box(&def.shape, rotation);
+    let (_min_x, _min_y, width_slots, height_slots) = calculate_bounding_box(&def.shape, rotation);
 
     let width_px = width_slots as f32 * TOTAL_CELL_SIZE - SLOT_GAP;
     let height_px = height_slots as f32 * TOTAL_CELL_SIZE - SLOT_GAP;
@@ -389,6 +389,9 @@ pub fn calculate_combat_stats(
     // 3. Calculate Stats & Synergies
     let item_lookup: HashMap<Entity, &ItemDefinition> = item_entities.iter().map(|(e, d, _, _)| (*e, *d)).collect();
 
+    // This loop was unused in previous code and caused warnings.
+    // Commented out as it seems redundant given the next loop does the full bonus calculation.
+    /*
     for (entity, def, pos, rot) in &item_entities {
         let mut item_attack = def.attack;
         let mut item_defense = def.defense;
@@ -426,10 +429,8 @@ pub fn calculate_combat_stats(
                 }
             }
         }
-
-        // Apply BuffTarget (Pass 2 Logic integrated or separate map)
-        // For accurate calculation, let's use a bonus map
     }
+    */
 
     // COMPLETE CALCULATION WITH MAP
     let mut bonuses: HashMap<Entity, CombatStats> = HashMap::new();
@@ -562,11 +563,15 @@ fn on_drag(
 fn on_drag_end(
    trigger: Trigger<Pointer<DragEnd>>,
    mut commands: Commands,
-   mut q_items: Query<(Entity, &mut GridPosition, &mut ItemRotation, &InventoryItem, &mut Node, Option<&Bag>)>,
-   q_bags_ro: Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
-   q_items_ro: Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>,
+   mut queries: ParamSet<(
+        Query<(Entity, &mut GridPosition, &mut ItemRotation, &InventoryItem, &Node, Option<&Bag>)>,
+        (
+            Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
+            Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>
+        )
+   )>,
    mut grid_state: ResMut<InventoryGridState>,
-   mut drag_state: ResMut<DragState>,
+   drag_state: Res<DragState>,
    mut ev_changed: EventWriter<InventoryChangedEvent>,
 ) {
    let entity = trigger.entity();
@@ -576,45 +581,51 @@ fn on_drag_end(
    // Because we can't easily query mutably and immutably at same time for Bag Content logic,
    // we will do a simpler check.
 
-   if let Ok((_e, mut grid_pos, mut rot, item_def, mut node, is_bag)) = q_items.get_mut(entity) {
-       let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
-       let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
+   // Access mutable query for the dragged item
+   {
+       let mut q_items = queries.p0();
+       if let Ok((_e, mut grid_pos, mut rot, item_def, node, is_bag)) = q_items.get_mut(entity) {
+           let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
+           let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
 
-       let target_x = (current_left / TOTAL_CELL_SIZE).round() as i32;
-       let target_y = (current_top / TOTAL_CELL_SIZE).round() as i32;
-       let target_pos = IVec2::new(target_x, target_y);
+           let target_x = (current_left / TOTAL_CELL_SIZE).round() as i32;
+           let target_y = (current_top / TOTAL_CELL_SIZE).round() as i32;
+           let target_pos = IVec2::new(target_x, target_y);
 
-       let mut valid = false;
+           let mut valid = false;
 
-       if is_bag.is_some() {
-           if grid_state.can_place_bag(&bag_def_to_shape(&q_bags_ro.get(entity).unwrap().3.provided_slots), target_pos, rot.0, Some(entity)) {
-               valid = true;
-           }
-       } else {
-           if grid_state.can_place_item(&item_def.shape, target_pos, rot.0, Some(entity)) {
-               valid = true;
-           }
-       }
-
-       if valid {
-           if is_bag.is_some() {
-               let delta = target_pos - drag_state.original_pos.unwrap_or(target_pos);
-               if delta != IVec2::ZERO {
-                   // move_bag_contents placeholder
+           if let Some(bag) = is_bag {
+               if grid_state.can_place_bag(&bag_def_to_shape(&bag.provided_slots), target_pos, rot.0, Some(entity)) {
+                   valid = true;
+               }
+           } else {
+               if grid_state.can_place_item(&item_def.shape, target_pos, rot.0, Some(entity)) {
+                   valid = true;
                }
            }
-           grid_pos.0 = target_pos;
-           ev_changed.send(InventoryChangedEvent);
-       } else {
-           if let Some(orig) = drag_state.original_pos {
-               grid_pos.0 = orig;
-           }
-           if let Some(orig_rot) = drag_state.original_rotation {
-               rot.0 = orig_rot;
+
+           if valid {
+               if is_bag.is_some() {
+                   let delta = target_pos - drag_state.original_pos.unwrap_or(target_pos);
+                   if delta != IVec2::ZERO {
+                       // move_bag_contents placeholder
+                   }
+               }
+               grid_pos.0 = target_pos;
+               ev_changed.send(InventoryChangedEvent);
+           } else {
+               if let Some(orig) = drag_state.original_pos {
+                   grid_pos.0 = orig;
+               }
+               if let Some(orig_rot) = drag_state.original_rotation {
+                   rot.0 = orig_rot;
+               }
            }
        }
    }
 
+   // Access read-only queries for rebuild
+   let (q_bags_ro, q_items_ro) = queries.p1();
    grid_state.rebuild_unified(&q_items_ro, &q_bags_ro);
 }
 

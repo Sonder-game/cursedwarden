@@ -44,7 +44,7 @@ struct ShopUiRoot;
 struct RerollButton;
 
 #[derive(Component)]
-struct ShopSlot(usize);
+struct ShopSlot(#[allow(dead_code)] usize);
 
 #[derive(Component)]
 struct LockButton(usize);
@@ -75,7 +75,7 @@ fn on_enter_shop(
 
     // Let's implement generation logic.
     // We need to keep locked items.
-    let mut new_items: Vec<ShopItem> = Vec::new();
+    // let mut new_items: Vec<ShopItem> = Vec::new(); // Unused
 
     // Check if we have existing items (from previous round)
     // If shop_state.items is empty, we just generate 5.
