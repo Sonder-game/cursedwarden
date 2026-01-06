@@ -513,7 +513,6 @@ fn buy_item_system(
 
                                  // I will assume I need ResMut in the system signature.
 
-                                 let mut dummy_grid_state = InventoryGridState::default(); // Hack if I can't get mut access due to usage above?
                                  // No, I can use `grid_state` if I have `ResMut`.
 
                                  // Wait, I changed the system signature to Res instead of ResMut in the comment above.
