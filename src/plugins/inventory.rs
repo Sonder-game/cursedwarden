@@ -576,8 +576,6 @@ fn on_drag_end(
 ) {
    let entity = trigger.entity();
 
-   commands.entity(entity).remove::<PickingBehavior>();
-
    // Because we can't easily query mutably and immutably at same time for Bag Content logic,
    // we will do a simpler check.
 
@@ -585,6 +583,7 @@ fn on_drag_end(
    {
        let mut q_items = queries.p0();
        if let Ok((_e, mut grid_pos, mut rot, item_def, node, is_bag)) = q_items.get_mut(entity) {
+           commands.entity(entity).remove::<PickingBehavior>();
            let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
            let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
 
