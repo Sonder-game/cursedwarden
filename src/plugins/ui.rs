@@ -27,10 +27,6 @@ fn spawn_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             justify_content: JustifyContent::SpaceBetween,
             flex_direction: FlexDirection::Column,
-            // pointer_events removed, using PickingBehavior if needed or default.
-            // Bevy 0.15 defaults to passing through if no interaction components?
-            // Actually, Node blocks clicks by default in picking.
-            // We need PickingBehavior::Ignore.
             ..default()
         },
         PickingBehavior::IGNORE,
