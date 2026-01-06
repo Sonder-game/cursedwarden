@@ -22,8 +22,7 @@ pub struct ItemDefinition {
     pub name: String,
     pub width: u8,
     pub height: u8,
-    // Важное поле: форма предмета в виде списка векторов
-    #[serde(default)]
+    #[serde(default)] // Allow omitting shape in JSON/RON if we generate it
     pub shape: Vec<IVec2>,
     #[allow(dead_code)]
     pub material: MaterialType,
