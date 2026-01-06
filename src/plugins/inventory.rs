@@ -3,30 +3,30 @@ use bevy::utils::HashMap;
 use crate::plugins::core::GameState;
 use crate::plugins::items::{ItemDefinition, ItemType};
 
-/// Плагин, управляющий всей логикой инвентаря, сетки и взаимодействия.
+/// Plugin managing all inventory logic, grid, and interaction.
+/// Implements "Inventory Tetris" mechanics using Bevy Observers.
 pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
    fn build(&self, app: &mut App) {
        app
-           // Ресурсы: Единый источник правды о топологии сетки
+           // Resources: Single source of truth for grid topology
           .init_resource::<InventoryGridState>()
-          .init_resource::<DragState>()
-           // События: Сигнализируют об изменениях для пересчета статов
+          .init_resource::<InteractionState>()
+           // Events: Signal changes for stat recalculation
           .add_event::<InventoryChangedEvent>()
-           // Системы жизненного цикла UI
+           // UI Lifecycle Systems
           .add_systems(OnEnter(GameState::EveningPhase), setup_inventory_ui)
           .add_systems(OnExit(GameState::EveningPhase), cleanup_inventory)
-           // Системы обновления (работают только в фазе инвентаря)
+           // Update Systems (run only in inventory phase)
           .add_systems(
                Update,
                (
-                   update_grid_visuals, // Синхронизация логики ECS -> UI
-                   handle_keyboard_rotation, // Вращение на клавишу R
-                   debug_grid_gizmos, // Визуальная отладка (заглушка)
+                   update_drag_visuals,        // Visual validation (red/green)
+                   update_item_transforms,     // Smooth snapping
                ).run_if(in_state(GameState::EveningPhase))
            )
-           // Bevy Picking Observers: Новая система событий для Drag & Drop (Bevy 0.15)
+           // Bevy Picking Observers: New event system for Drag & Drop (Bevy 0.15)
           .add_observer(on_drag_start)
           .add_observer(on_drag)
           .add_observer(on_drag_end);
@@ -34,589 +34,539 @@ impl Plugin for InventoryPlugin {
 }
 
 // ============================================================================
-// КОМПОНЕНТЫ (COMPONENTS)
+// CONSTANTS AND SETTINGS
 // ============================================================================
 
-/// Основной компонент предмета. Хранит его ID и форму.
+pub const CELL_SIZE: f32 = 64.0;
+pub const CELL_GAP: f32 = 2.0;
+// Effective grid step for calculations (Size + Gap)
+pub const GRID_STEP: f32 = CELL_SIZE;
+
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+/// Main item component. Stores its ID and base shape.
 #[derive(Component)]
 pub struct InventoryItem {
    pub item_id: String,
-   /// Список относительных координат, которые занимает предмет.
-   /// (0,0) - это верхний левый угол (Anchor/Якорь).
-   pub shape: Vec<IVec2>,
+   /// Shape defined by list of offsets from (0,0). Example: [(0,0), (1,0), (0,1)]
+   pub base_shape: Vec<IVec2>,
+   pub width: u8,
+   pub height: u8,
 }
 
-/// Компонент сумки. Сумка - это тоже предмет, но она СОЗДАЕТ (проецирует) слоты.
+/// Bag component. A bag is an item that PROVIDES slots.
 #[derive(Component)]
 pub struct Bag {
-   /// Форма предоставляемых слотов (относительно Anchor).
    pub provided_slots: Vec<IVec2>,
 }
 
-/// Логическая позиция в сетке. Единый источник правды для логики.
-/// IVec2(x, y). Ось Y растет вниз.
-#[derive(Component)]
+/// Logical grid position (X, Y).
+/// (0,0) corresponds to the top-left corner of the grid container.
+#[derive(Component, Debug, Clone, Copy)]
 pub struct GridPosition(pub IVec2);
 
-/// Текущий поворот: 0=0°, 1=90°, 2=180°, 3=270°.
-#[derive(Component)]
+/// Current rotation: 0=0°, 1=90°, 2=180°, 3=270°.
+#[derive(Component, Debug, Clone, Copy)]
 pub struct ItemRotation(pub u8);
 
-/// Маркер, определяющий, находится ли предмет в зоне "Хранилища" (Limbo).
+/// Marker for items in "Storage" (Limbo), not on the grid.
 #[derive(Component)]
 pub struct InStorage;
 
-// Маркеры для UI узлов
-#[derive(Component)] struct InventoryRoot;
-#[derive(Component)] pub struct InventoryGridContainer; // Зона активного инвентаря
-#[derive(Component)] pub struct StorageContainer; // Зона "Limbo"
+/// Marker for the inventory UI root node.
+#[derive(Component)]
+pub struct InventoryUiRoot;
+
+/// Marker for the container representing the visual grid.
+#[derive(Component)]
+pub struct InventoryGridContainer;
 
 // ============================================================================
-// РЕСУРСЫ (RESOURCES)
+// RESOURCES
 // ============================================================================
 
-/// Глобальное состояние сетки. Используется для быстрых проверок коллизий (O(1)).
+/// Global grid state. Used for fast collision checks (O(1)).
 #[derive(Resource, Default)]
 pub struct InventoryGridState {
-   /// Карта слотов. Ключ - координата. Значение - данные о слоте.
-   pub slots: HashMap<IVec2, SlotData>,
-   /// Границы активной зоны (для ограничения движения сумок).
+   /// Occupancy map: Coordinate -> Item Entity
+   pub occupancy: HashMap<IVec2, Entity>,
+   /// Slot map: Coordinate -> Bag Entity providing the slot
+   pub slots: HashMap<IVec2, Entity>,
+   /// Active zone bounds (to limit bag movement).
    pub bounds: IRect,
 }
 
-#[derive(Clone)]
-pub struct SlotData {
-   /// ID сущности сумки, которая создала этот слот.
-   pub bag_entity: Entity,
-   /// ID сущности предмета, который занимает этот слот (или None).
-   pub occupier: Option<Entity>,
-}
-
-/// Состояние текущего перетаскивания.
+/// State of the current drag operation.
 #[derive(Resource, Default)]
-pub struct DragState {
-   /// Исходная позиция (для отката при невалидном сбросе).
-   pub original_pos: Option<IVec2>,
-   pub original_rotation: Option<u8>,
+pub struct InteractionState {
+   pub dragged_entity: Option<Entity>,
+   /// Original position (for revert on invalid drop)
+   pub original_grid_pos: IVec2,
+   pub original_rotation: u8,
    pub was_in_storage: bool,
-   /// Если тащим сумку, здесь хранятся ID предметов внутри неё для кинематики.
-   pub attached_items: Vec<Entity>,
 }
 
 #[derive(Event)]
 pub struct InventoryChangedEvent;
 
 // ============================================================================
-// КОНСТАНТЫ (Настройка визуального стиля)
-// ============================================================================
-
-const SLOT_SIZE: f32 = 64.0;
-const SLOT_GAP: f32 = 2.0;
-const TOTAL_CELL_SIZE: f32 = SLOT_SIZE + SLOT_GAP;
-
-// ============================================================================
-// ЛОГИКА СЕТКИ (GRID ALGORITHMS)
+// GRID ALGORITHMS CORE
 // ============================================================================
 
 impl InventoryGridState {
-   /// Публичный хелпер для доступа к логике вращения из других модулей (например, для отрисовки синергий).
-   pub fn get_rotated_shape(shape: &Vec<IVec2>, rot: u8) -> Vec<IVec2> {
-       rotate_shape(shape, rot)
-   }
-
-   /// Полная перестройка карты слотов. Вызывается после любого изменения.
-   /// Это гарантирует целостность данных и решает проблему рассинхронизации.
+   /// Full rebuild of slot and occupancy maps.
+   /// Called after any successful inventory change.
    pub fn rebuild(
        &mut self,
-       q_bags: &Query<(Entity, &GridPosition, &ItemRotation, &Bag), Without<InStorage>>,
-       q_items: &Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), (Without<Bag>, Without<InStorage>)>,
+       bags: &Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
+       items: &Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>,
    ) {
        self.slots.clear();
+       self.occupancy.clear();
        self.bounds = IRect::new(0, 0, 0, 0);
 
-       // 1. Проецируем все сумки на сетку (создаем валидные слоты)
-       for (bag_entity, bag_pos, bag_rot, bag) in q_bags.iter() {
-           let shape = rotate_shape(&bag.provided_slots, bag_rot.0);
+       // 1. Project Bags onto grid (Create "Background" of slots)
+       for (entity, pos, rot, bag) in bags.iter() {
+           let shape = rotate_shape(&bag.provided_slots, rot.0);
            for offset in shape {
-               let slot_pos = bag_pos.0 + offset;
-               // Если сумки перекрываются, последняя "побеждает".
-               // В идеале можно добавить логику запрета перекрытия сумок.
-               self.slots.insert(slot_pos, SlotData {
-                   bag_entity,
-                   occupier: None,
-               });
-               // Расширяем границы сетки
-               self.bounds.max = self.bounds.max.max(slot_pos);
+               let slot_pos = pos.0 + offset;
+               // If slots overlap, last one wins (or logic to forbid could be added)
+               self.slots.insert(slot_pos, entity);
+
+               // Expand bounds
                self.bounds.min = self.bounds.min.min(slot_pos);
+               self.bounds.max = self.bounds.max.max(slot_pos);
            }
        }
 
-       // 2. Размещаем предметы в слотах
-       for (item_entity, item_pos, item_rot, item) in q_items.iter() {
-           let shape = rotate_shape(&item.shape, item_rot.0);
+       // 2. Place Items (Fill "Foreground")
+       for (entity, pos, rot, item) in items.iter() {
+           // Items in storage are ignored (query filter should handle this, but adding check)
+           let shape = rotate_shape(&item.base_shape, rot.0);
            for offset in shape {
-               let cell_pos = item_pos.0 + offset;
-               if let Some(slot) = self.slots.get_mut(&cell_pos) {
-                   if slot.occupier.is_some() {
-                       warn!("Коллизия! Клетка {:?} уже занята предметом {:?}.", cell_pos, slot.occupier);
-                   }
-                   slot.occupier = Some(item_entity);
-               } else {
-                   // Предмет висит в воздухе (вне сумки).
-                   // В момент rebuild это считается невалидным состоянием, но мы не удаляем предмет,
-                   // чтобы избежать потери данных при багах.
+               let cell = pos.0 + offset;
+
+               // Collision check during rebuild (for debug)
+               if self.occupancy.contains_key(&cell) {
+                   warn!("Collision detected during rebuild at {:?}! Entity {:?}", cell, entity);
                }
+               self.occupancy.insert(cell, entity);
            }
        }
    }
 
-   /// Проверяет, можно ли разместить ПРЕДМЕТ в заданных координатах.
+   /// Checks if an ITEM can be placed at given coordinates.
+   /// Core "Tetris" logic.
    pub fn can_place_item(
        &self,
-       shape: &Vec<IVec2>,
+       shape: &[IVec2],
        pos: IVec2,
        rot: u8,
-       exclude_entity: Option<Entity>,
-       target_is_storage: bool,
+       ignore_entity: Option<Entity>,
    ) -> bool {
-       // В хранилище (Storage) всегда можно класть (упрощение: бесконечная емкость).
-       if target_is_storage {
-           return true;
-       }
+       let rotated = rotate_shape(shape, rot);
 
-       let rotated_shape = rotate_shape(shape, rot);
-       for offset in rotated_shape {
-           let target_pos = pos + offset;
-           match self.slots.get(&target_pos) {
-               Some(slot) => {
-                   // Слот существует (лежит на сумке). Проверяем занятость.
-                   if let Some(occupier) = slot.occupier {
-                       // Если занято не нами самими - это коллизия.
-                       if Some(occupier)!= exclude_entity {
-                           return false;
-                       }
-                   }
-               },
-               None => return false, // Нет сумки под предметом -> Нельзя положить.
+       for offset in rotated {
+           let target = pos + offset;
+
+           // Rule 1: Must be a valid slot (provided by a bag)
+           if !self.slots.contains_key(&target) {
+               return false;
+           }
+
+           // Rule 2: Slot must not be occupied by another item
+           if let Some(occupier) = self.occupancy.get(&target) {
+               // If occupied not by us - it's a collision.
+               if Some(*occupier) != ignore_entity {
+                   return false;
+               }
            }
        }
        true
    }
 
-   /// Проверяет, можно ли разместить СУМКУ. Сумки не должны перекрывать друг друга.
+   /// Checks if a BAG can be placed.
+   /// Rule: Bags must not overlap each other (in this implementation).
    pub fn can_place_bag(
        &self,
-       bag_shape: &Vec<IVec2>,
+       shape: &[IVec2],
        pos: IVec2,
        rot: u8,
-       exclude_bag: Option<Entity>,
+       ignore_entity: Option<Entity>,
    ) -> bool {
-       let rotated_shape = rotate_shape(bag_shape, rot);
-       for offset in rotated_shape {
-           let target_pos = pos + offset;
-           if let Some(slot) = self.slots.get(&target_pos) {
-               if Some(slot.bag_entity)!= exclude_bag {
-                   return false; // Наехали на другую сумку
+       let rotated = rotate_shape(shape, rot);
+       for offset in rotated {
+           let target = pos + offset;
+           // Check if anyone already provides a slot here
+           if let Some(provider) = self.slots.get(&target) {
+               if Some(*provider) != ignore_entity {
+                   return false;
                }
            }
        }
        true
    }
 
-   // Хелпер для ИИ/Магазина: Найти первое свободное место
-   pub fn find_free_spot(&self, def: &ItemDefinition) -> Option<IVec2> {
-       let min = self.bounds.min;
-       let max = self.bounds.max;
-       for y in min.y..=max.y {
-           for x in min.x..=max.x {
-               let pos = IVec2::new(x, y);
-               // Пробуем с нулевым поворотом
-               if self.can_place_item(&def.shape, pos, 0, None, false) {
-                   return Some(pos);
-               }
-           }
-       }
-       None
-   }
+    // Helper: Find a free spot for an item (Basic "First Fit" algorithm)
+    // Used by Shop and initial loading
+    pub fn find_free_spot(
+        &self,
+        item_shape: &[IVec2],
+        width: u8,
+        height: u8,
+        preferred_pos: Option<IVec2>,
+    ) -> Option<IVec2> {
+        // Optimization: iterate within bounds
+        let start = self.bounds.min;
+        let end = self.bounds.max;
+
+        if let Some(pos) = preferred_pos {
+             if self.can_place_item(item_shape, pos, 0, None) {
+                 return Some(pos);
+             }
+        }
+
+        // Brute-force search (could be optimized)
+        for y in start.y..=end.y {
+            for x in start.x..=end.x {
+                let pos = IVec2::new(x, y);
+                // Try rotation 0 for now. If needed, loop rotations.
+                if self.can_place_item(item_shape, pos, 0, None) {
+                    return Some(pos);
+                }
+            }
+        }
+        None
+    }
 }
 
-/// Математика вращения векторов на дискретной сетке (90 град CW)
-fn rotate_shape(shape: &Vec<IVec2>, rot: u8) -> Vec<IVec2> {
-   let steps = rot % 4;
-   if steps == 0 { return shape.clone(); }
+/// Vector rotation math on discrete grid (90 deg clockwise).
+pub fn rotate_shape(shape: &[IVec2], rot: u8) -> Vec<IVec2> {
+   let turns = rot % 4;
+   if turns == 0 {
+       return shape.to_vec();
+   }
+
    shape.iter().map(|p| {
        let mut v = *p;
-       for _ in 0..steps {
-           // Формула поворота на 90 град по часовой стрелке в экранных координатах (Y вниз):
-           // (x, y) -> (-y, x)
+       for _ in 0..turns {
+           // Rotation matrix for screen coords (Y down): (x, y) -> (-y, x)
            v = IVec2::new(-v.y, v.x);
        }
        v
    }).collect()
 }
 
-// Хелпер для вычисления Bounding Box в пикселях (для спавна)
-fn calculate_bounding_box(shape: &Vec<IVec2>, rotation_step: u8) -> (i32, i32, i32, i32) {
-   let rotated_shape = rotate_shape(shape, rotation_step);
-   if rotated_shape.is_empty() { return (0, 0, 1, 1); }
-   let min_x = rotated_shape.iter().map(|v| v.x).min().unwrap();
-   let max_x = rotated_shape.iter().map(|v| v.x).max().unwrap();
-   let min_y = rotated_shape.iter().map(|v| v.y).min().unwrap();
-   let max_y = rotated_shape.iter().map(|v| v.y).max().unwrap();
-   (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
-}
+pub use crate::plugins::inventory_utils::calculate_combat_stats;
 
 // ============================================================================
-// СИСТЕМА ВЗАИМОДЕЙСТВИЯ (BEVY PICKING OBSERVERS)
+// INTERACTION SYSTEM (OBSERVERS)
 // ============================================================================
 
-/// Начало перетаскивания (ЛКМ нажат)
+/// Start drag
 fn on_drag_start(
    trigger: Trigger<Pointer<DragStart>>,
    mut commands: Commands,
-   q_items: Query<(Entity, &GridPosition, &ItemRotation, Option<&Bag>, Has<InStorage>), With<InventoryItem>>,
-   mut drag_state: ResMut<DragState>,
-   mut q_node: Query<(&mut ZIndex, &Node)>,
-   grid_state: Res<InventoryGridState>,
+   q_items: Query<(Entity, &GridPosition, &ItemRotation, Has<InStorage>)>,
+   mut interaction: ResMut<InteractionState>,
 ) {
    let entity = trigger.entity();
-   if let Ok((_e, grid_pos, rot, is_bag, in_storage)) = q_items.get(entity) {
-       // 1. Сохраняем состояние для отката (Undo)
-       drag_state.original_pos = Some(grid_pos.0);
-       drag_state.original_rotation = Some(rot.0);
-       drag_state.was_in_storage = in_storage;
-       drag_state.attached_items.clear();
 
-       // 2. ЛОГИКА КИНЕМАТИКИ СУМОК (Bag Dragging)
-       if is_bag.is_some() &&!in_storage {
-           // Ищем все предметы, которые лежат в слотах этой сумки
-           for (_slot_pos, slot_data) in &grid_state.slots {
-               if slot_data.bag_entity == entity {
-                   if let Some(occupier) = slot_data.occupier {
-                       if!drag_state.attached_items.contains(&occupier) {
-                           drag_state.attached_items.push(occupier);
-                       }
-                   }
-               }
-           }
-       }
+   if let Ok((_, grid_pos, rot, in_storage)) = q_items.get(entity) {
+       // 1. Save state for potential undo
+       interaction.dragged_entity = Some(entity);
+       interaction.original_grid_pos = grid_pos.0;
+       interaction.original_rotation = rot.0;
+       interaction.was_in_storage = in_storage;
 
-       // 3. Визуальный фидбек: Поднимаем предмет над всем UI (GlobalZIndex 100)
-       // Важно: Мы используем обычный ZIndex внутри контейнера, но для перекрытия всего
-       // можно использовать GlobalZIndex, если родительский контейнер имеет низкий Z.
-       // Здесь мы просто ставим высокий локальный ZIndex.
-       if let Ok((mut z_index, _)) = q_node.get_mut(entity) {
-           *z_index = ZIndex(100);
-       }
+       // 2. Visual feedback: Lift item to foreground (Z-Index)
+       // Use large local Z-index. GlobalZIndex is better if available.
+       commands.entity(entity).insert(ZIndex(100));
 
-       // 4. КРИТИЧЕСКИ ВАЖНО: Игнорируем Picking для самого предмета во время драга.
-       // Это позволяет лучу мыши "пробивать" предмет насквозь и видеть сетку под ним.
+       // 3. CRITICAL: Disable Picking for the item itself.
+       // This allows the cursor to "see through" the item and detect which container we are over.
        commands.entity(entity).insert(PickingBehavior::IGNORE);
    }
 }
 
-/// Процесс перетаскивания (движение мыши) - обновляем только визуал
+/// Drag process (visual update)
 fn on_drag(
    trigger: Trigger<Pointer<Drag>>,
    mut q_node: Query<&mut Node>,
 ) {
+   // We update only visual position (Style).
+   // Validation logic runs separately in update_drag_visuals.
    let entity = trigger.entity();
-   let drag_event = trigger.event();
+   let drag = trigger.event();
+
    if let Ok(mut node) = q_node.get_mut(entity) {
-       // Обновляем визуальные координаты (Style). Логические (GridPosition) не трогаем.
-       if let Val::Px(left) = node.left {
-           node.left = Val::Px(left + drag_event.delta.x);
-       }
-       if let Val::Px(top) = node.top {
-           node.top = Val::Px(top + drag_event.delta.y);
-       }
+       if let Val::Px(x) = node.left { node.left = Val::Px(x + drag.delta.x); }
+       if let Val::Px(y) = node.top { node.top = Val::Px(y + drag.delta.y); }
    }
 }
 
-/// Завершение перетаскивания (ЛКМ отпущен) - основная логика
+/// End drag (LMB released)
 fn on_drag_end(
    trigger: Trigger<Pointer<DragEnd>>,
    mut commands: Commands,
-   // Используем ParamSet для разрешения конфликтов заимствования
+   // Use ParamSet to resolve borrow conflicts
    mut queries: ParamSet<(
-       Query<(Entity, &mut GridPosition, &mut ItemRotation, &InventoryItem, &Node, Option<&Bag>, Has<InStorage>)>, // Mutable
+       Query<(Entity, &mut Node, &mut GridPosition, &mut ItemRotation, &InventoryItem, Option<&Bag>, Has<InStorage>)>, // Mutable
        (
-           Query<(Entity, &GridPosition, &ItemRotation, &Bag), Without<InStorage>>, // Bags Read-Only
-           Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), (Without<Bag>, Without<InStorage>)> // Items Read-Only
+           Query<(Entity, &GridPosition, &ItemRotation, &Bag)>, // Bags Read-Only
+           Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>> // Items Read-Only
        )
    )>,
    mut grid_state: ResMut<InventoryGridState>,
-   drag_state: Res<DragState>,
+   mut interaction: ResMut<InteractionState>,
+   _q_container: Query<(&Node, &GlobalTransform), With<InventoryGridContainer>>,
    mut ev_changed: EventWriter<InventoryChangedEvent>,
 ) {
    let entity = trigger.entity();
 
-   // 1. Возвращаем интерактивность предмету
+   // Restore interactivity to item
    commands.entity(entity).insert(PickingBehavior::default());
+   commands.entity(entity).insert(ZIndex(10)); // Reset Z-index
 
-   let mut success = false;
-   let mut delta = IVec2::ZERO;
+   let mut placement_success = false;
 
-   // Scope для мутабельного доступа
    {
        let mut q_mutable = queries.p0();
-       if let Ok((_, mut grid_pos, mut rot, item_def, node, is_bag, _)) = q_mutable.get_mut(entity) {
-           // 2. Рассчет координат привязки (Snapping)
-           // Преобразуем координаты UI Node в индексы сетки.
-           let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
-           let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
+       if let Ok((_, mut node, mut grid_pos, mut rot, item_def, is_bag, _)) = q_mutable.get_mut(entity) {
+           // Determine current Node coordinates
+           let current_left = if let Val::Px(l) = node.left { l } else { 0.0 };
+           let current_top = if let Val::Px(t) = node.top { t } else { 0.0 };
 
-           // Определяем, находится ли мышь над зоной Хранилища (хардкод порога по Y)
-           let is_storage_drop = current_top > 400.0;
+           // Grid Snapping
+           // Round to nearest grid integer index
+           let grid_x = (current_left / GRID_STEP).round() as i32;
+           let grid_y = (current_top / GRID_STEP).round() as i32;
+           let target_pos = IVec2::new(grid_x, grid_y);
 
-           let target_x = (current_left / TOTAL_CELL_SIZE).round() as i32;
-           let target_y = (current_top / TOTAL_CELL_SIZE).round() as i32;
-           let target_pos = IVec2::new(target_x, target_y);
+           // Validation Logic
+           // In real game need check if we are over GridContainer
+           // For simplicity: if coordinates valid for placement, we are over grid.
 
-           // 3. Валидация
-           let mut valid = false;
-           if is_storage_drop {
-               // Логика сброса в хранилище (всегда разрешено)
-               commands.entity(entity).insert(InStorage);
-               valid = true;
+           let valid = if is_bag.is_some() {
+               grid_state.can_place_bag(&item_def.base_shape, target_pos, rot.0, Some(entity))
            } else {
-               // Если были в хранилище, убираем компонент
-               commands.entity(entity).remove::<InStorage>();
+               grid_state.can_place_item(&item_def.base_shape, target_pos, rot.0, Some(entity))
+           };
 
-               if let Some(bag) = is_bag {
-                   // Перемещение Сумки: Проверяем, не наезжает ли она на другие сумки
-                   if grid_state.can_place_bag(&bag.provided_slots, target_pos, rot.0, Some(entity)) {
-                       valid = true;
-                   }
-               } else {
-                   // Перемещение Предмета: Проверяем, попадает ли он в слоты сумок
-                   if grid_state.can_place_item(&item_def.shape, target_pos, rot.0, Some(entity), false) {
-                       valid = true;
-                   }
-               }
-           }
-
-           // 4. Применение или Откат
            if valid {
-               // УСПЕХ
-               // Если мы двигали сумку, вычисляем дельту для вложенных предметов
-               if is_bag.is_some() &&!is_storage_drop {
-                   delta = target_pos - drag_state.original_pos.unwrap_or(target_pos);
-               }
+               // COMMIT: Apply changes
                grid_pos.0 = target_pos;
+               commands.entity(entity).remove::<InStorage>();
+               placement_success = true;
                ev_changed.send(InventoryChangedEvent);
-               success = true;
            } else {
-               // ОТКАТ
-               if let Some(orig) = drag_state.original_pos {
-                   grid_pos.0 = orig;
-               }
-               if let Some(orig_rot) = drag_state.original_rotation {
-                   rot.0 = orig_rot;
-               }
-               // Возврат флага InStorage
-               if drag_state.was_in_storage {
+               // REVERT: Rollback to original state
+               grid_pos.0 = interaction.original_grid_pos;
+               rot.0 = interaction.original_rotation;
+               if interaction.was_in_storage {
                    commands.entity(entity).insert(InStorage);
-               } else {
-                   commands.entity(entity).remove::<InStorage>();
                }
            }
        }
    }
 
-   // Обработка "пассажиров" (предметов внутри сумки)
-   if success && delta!= IVec2::ZERO {
-       let mut q_mutable = queries.p0();
-       for attached_entity in &drag_state.attached_items {
-           if let Ok((_, mut item_pos, _, _, _, _, _)) = q_mutable.get_mut(*attached_entity) {
-               item_pos.0 += delta;
-           }
-       }
+   // If placement successful, need to rebuild grid state
+   if placement_success {
+       let (bags, items) = queries.p1();
+       grid_state.rebuild(&bags, &items);
    }
 
-   // 5. Перестройка состояния сетки для следующего кадра
-   let (q_bags, q_items) = queries.p1();
-   grid_state.rebuild(&q_bags, &q_items);
+   // Clear interaction state
+   interaction.dragged_entity = None;
 }
 
 // ============================================================================
-// ВИЗУАЛЬНАЯ СИНХРОНИЗАЦИЯ
+// VISUAL UPDATE SYSTEMS
 // ============================================================================
 
-/// Синхронизирует позицию UI Node с логической GridPosition.
-/// Работает каждый кадр, обеспечивая плавность и коррекцию после Drop.
-fn update_grid_visuals(
-   mut q_items: Query<(Entity, &GridPosition, &mut Node, &mut ZIndex, Option<&PickingBehavior>), (With<InventoryItem>, Changed<GridPosition>)>,
+/// Syncs visual Node position with logical GridPosition.
+/// Ensures "snapping" after drop and drift correction.
+fn update_item_transforms(
+   mut q_items: Query<(Entity, &mut Node, &GridPosition), With<InventoryItem>>,
+   interaction: Res<InteractionState>,
 ) {
-   for (_entity, pos, mut node, mut z_index, picking) in q_items.iter_mut() {
-       // Не трогаем позицию, если предмет прямо сейчас перетаскивается
-       if let Some(behavior) = picking {
-           if *behavior == PickingBehavior::IGNORE {
+   for (e, mut node, pos) in q_items.iter_mut() {
+       // Skip the item currently being dragged, as its position is controlled by the mouse
+       if let Some(dragged) = interaction.dragged_entity {
+           if e == dragged {
                continue;
            }
        }
 
-       // Жесткая привязка к сетке (Snapping)
-       node.left = Val::Px(pos.0.x as f32 * TOTAL_CELL_SIZE);
-       node.top = Val::Px(pos.0.y as f32 * TOTAL_CELL_SIZE);
+       let target_x = pos.0.x as f32 * GRID_STEP;
+       let target_y = pos.0.y as f32 * GRID_STEP;
 
-       // Сброс Z-Index на нормальный уровень
-       *z_index = ZIndex(10);
+       // Update only if position differs to avoid unnecessary layout recalc
+       // Use small epsilon for float comparison
+       if let Val::Px(current_x) = node.left {
+           if (current_x - target_x).abs() > 0.1 { node.left = Val::Px(target_x); }
+       } else { node.left = Val::Px(target_x); }
+
+       if let Val::Px(current_y) = node.top {
+           if (current_y - target_y).abs() > 0.1 { node.top = Val::Px(target_y); }
+       } else { node.top = Val::Px(target_y); }
    }
 }
 
-/// Обработка вращения клавишей R
-fn handle_keyboard_rotation(
+/// Runs every frame during Drag: provides tint (Green/Red) and rotation
+fn update_drag_visuals(
+   mut interaction: ResMut<InteractionState>,
+   mut q_dragged: Query<(&mut Node, &mut BackgroundColor, &mut ItemRotation, &InventoryItem, Option<&Bag>)>,
+   grid_state: Res<InventoryGridState>,
    input: Res<ButtonInput<KeyCode>>,
-   mut q_items: Query<(&mut ItemRotation, &mut Node, &PickingBehavior)>,
 ) {
-   if input.just_pressed(KeyCode::KeyR) {
-       for (mut rot, mut node, behavior) in q_items.iter_mut() {
-           // Вращаем только тот предмет, который сейчас тащим
-           if *behavior == PickingBehavior::IGNORE {
-               rot.0 = (rot.0 + 1) % 4;
-               // Визуальный поворот: меняем ширину и высоту местами
-               let temp = node.width;
-               node.width = node.height;
-               node.height = temp;
-           }
+   let Some(entity) = interaction.dragged_entity else { return; };
+
+   if let Ok((mut node, mut bg, mut rot, item_def, is_bag)) = q_dragged.get_mut(entity) {
+
+       // 1. Handle rotation (R)
+       if input.just_pressed(KeyCode::KeyR) {
+           rot.0 = (rot.0 + 1) % 4;
+           // Visually swap width/height for preview
+           // Note: works for rectangles. Complex shapes need texture/mesh rotation.
+           let temp = node.width;
+           node.width = node.height;
+           node.height = temp;
+       }
+
+       // 2. Calculate "Ghost" position
+       let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
+       let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
+
+       let grid_x = (current_left / GRID_STEP).round() as i32;
+       let grid_y = (current_top / GRID_STEP).round() as i32;
+       let target_pos = IVec2::new(grid_x, grid_y);
+
+       // 3. Real-time Validation
+       let is_valid = if is_bag.is_some() {
+           grid_state.can_place_bag(&item_def.base_shape, target_pos, rot.0, Some(entity))
+       } else {
+           grid_state.can_place_item(&item_def.base_shape, target_pos, rot.0, Some(entity))
+       };
+
+       // 4. Apply Tint
+       if is_valid {
+           *bg = BackgroundColor(Color::srgba(0.5, 1.0, 0.5, 0.8)); // Translucent Green
+       } else {
+           *bg = BackgroundColor(Color::srgba(1.0, 0.5, 0.5, 0.8)); // Translucent Red
        }
    }
 }
 
 // ============================================================================
-// ИНИЦИАЛИЗАЦИЯ UI
+// INITIALIZATION AND UTILITIES
 // ============================================================================
 
 fn setup_inventory_ui(mut commands: Commands) {
-   // Корневой контейнер
+   // Root screen
    commands.spawn((
        Node {
            width: Val::Percent(100.0),
            height: Val::Percent(100.0),
-           justify_content: JustifyContent::FlexStart, // Сверху вниз
-           align_items: AlignItems::Center,
+           display: Display::Flex,
            flex_direction: FlexDirection::Column,
+           align_items: AlignItems::Center,
+           justify_content: JustifyContent::Center,
           ..default()
        },
-       InventoryRoot,
+       InventoryUiRoot,
+       BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
    )).with_children(|parent| {
-       // 1. Активная зона инвентаря (где сумки)
+
        parent.spawn((
-           Node {
-               width: Val::Px(800.0),
-               height: Val::Px(400.0),
-               position_type: PositionType::Relative,
-               border: UiRect::all(Val::Px(2.0)),
-               margin: UiRect::bottom(Val::Px(20.0)),
-              ..default()
-           },
-           InventoryGridContainer,
-           BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+           Text::new("Inventory Mode (Drag to Move, R to Rotate)"),
+           TextFont { font_size: 20.0,..default() },
+           TextColor(Color::WHITE),
+           Node { margin: UiRect::bottom(Val::Px(20.0)),..default() }
        ));
 
-       // 2. Зона Хранилища (Limbo / Storage)
+       // Grid Container (Reference Frame)
        parent.spawn((
            Node {
                width: Val::Px(800.0),
-               height: Val::Px(200.0),
-               position_type: PositionType::Relative,
-               border: UiRect::all(Val::Px(2.0)),
+               height: Val::Px(600.0),
+               position_type: PositionType::Relative, // Important: children positioned relative to this
+               border: UiRect::all(Val::Px(4.0)),
               ..default()
            },
-           StorageContainer,
-           BackgroundColor(Color::srgb(0.15, 0.15, 0.25)), // Чуть синее
-       )).with_children(|p| {
-           p.spawn((
-               Text::new("STORAGE (LIMBO)"),
-               TextFont { font_size: 20.0,..default() },
-               TextColor(Color::WHITE),
-               Node {
-                   position_type: PositionType::Absolute,
-                   top: Val::Px(5.0),
-                   left: Val::Px(5.0),
-                  ..default()
-               },
-           ));
-       });
+           BorderColor(Color::WHITE),
+           BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+           InventoryGridContainer,
+       ));
    });
 }
 
-fn cleanup_inventory(mut commands: Commands, q: Query<Entity, With<InventoryRoot>>) {
-   for e in q.iter() {
-       commands.entity(e).despawn_recursive();
-   }
+fn cleanup_inventory(
+   mut commands: Commands,
+   q: Query<Entity, With<InventoryUiRoot>>,
+) {
+   for e in q.iter() { commands.entity(e).despawn_recursive(); }
 }
 
-fn debug_grid_gizmos(_gizmos: Gizmos) {}
-
-// Хелпер для спавна (используется при загрузке и в магазине)
+/// Helper for spawning items. Used by other plugins (Shop, LoadGame).
 pub fn spawn_item_entity(
    commands: &mut Commands,
-   container: Entity,
+   parent: Entity,
    def: &ItemDefinition,
    pos: IVec2,
-   rotation: u8,
+   rot: u8,
    _grid_state: &mut InventoryGridState,
 ) {
-   let (_min_x, _min_y, width_slots, height_slots) = calculate_bounding_box(&def.shape, rotation);
-   let width_px = width_slots as f32 * 64.0;
-   let height_px = height_slots as f32 * 64.0;
+   // Determine pixels size with rotation
+   let (w, h) = if rot % 2 == 0 { (def.width, def.height) } else { (def.height, def.width) };
 
-   let left = pos.x as f32 * 64.0;
-   let top = pos.y as f32 * 64.0;
+   let width_px = w as f32 * GRID_STEP - CELL_GAP;
+   let height_px = h as f32 * GRID_STEP - CELL_GAP;
+   let x_px = pos.x as f32 * GRID_STEP;
+   let y_px = pos.y as f32 * GRID_STEP;
 
-   let is_bag = matches!(def.item_type, ItemType::Bag {.. });
-   let z_idx = if is_bag { ZIndex(1) } else { ZIndex(10) };
-   let bg_color = if is_bag { Color::srgb(0.4, 0.2, 0.1) } else { Color::srgb(0.5, 0.5, 0.8) };
+   let is_bag = matches!(def.item_type, ItemType::Bag {..});
+   // Bags lower (Z=1), items higher (Z=10)
+   let color = if is_bag { Color::srgb(0.6, 0.4, 0.2) } else { Color::srgb(0.3, 0.3, 0.8) };
+   let z = if is_bag { 1 } else { 10 };
 
-   let mut entity_cmds = commands.spawn((
+   let id = commands.spawn((
        Node {
+           position_type: PositionType::Absolute,
+           left: Val::Px(x_px),
+           top: Val::Px(y_px),
            width: Val::Px(width_px),
            height: Val::Px(height_px),
-           position_type: PositionType::Absolute,
-           left: Val::Px(left),
-           top: Val::Px(top),
            border: UiRect::all(Val::Px(1.0)),
+           // Important: padding and margins can mess up calculations, use absolute positioning
           ..default()
        },
-       BackgroundColor(bg_color),
+       BackgroundColor(color),
+       BorderColor(Color::BLACK),
        InventoryItem {
            item_id: def.id.clone(),
-           shape: def.shape.clone(),
+           base_shape: def.shape.clone(),
+           width: def.width,
+           height: def.height,
        },
        GridPosition(pos),
-       ItemRotation(rotation),
-       z_idx,
-       PickingBehavior::default(),
-   ));
+       ItemRotation(rot),
+       ZIndex(z),
+       PickingBehavior::default(), // Enable Picking explicitly
+   )).with_children(|p| {
+       p.spawn((
+           Text::new(&def.name),
+           TextFont { font_size: 10.0,..default() },
+           TextColor(Color::WHITE),
+           PickingBehavior::IGNORE, // Text should not capture clicks
+       ));
+   }).id();
 
    if is_bag {
-       entity_cmds.insert(Bag { provided_slots: def.shape.clone() });
+       commands.entity(id).insert(Bag { provided_slots: def.shape.clone() });
    }
 
-   // Текст названия
-   entity_cmds.with_children(|parent| {
-       parent.spawn((
-           Text::new(&def.name),
-           TextFont { font_size: 14.0,..default() },
-           TextColor(Color::WHITE),
-           Node {
-               position_type: PositionType::Absolute,
-               left: Val::Px(2.0),
-               top: Val::Px(2.0),
-              ..default()
-           },
-           PickingBehavior::IGNORE, // Текст не должен блокировать драг
-       ));
-   });
-
-   let entity = entity_cmds.id();
-   commands.entity(container).add_child(entity);
-}
-
-// Заглушка для боевой статистики
-pub struct CombatStats { pub attack: f32, pub defense: f32, pub speed: f32, pub health: f32 }
-pub fn calculate_combat_stats(_inv: &crate::plugins::metagame::PersistentInventory, _db: &crate::plugins::items::ItemDatabase) -> CombatStats {
-   CombatStats { attack: 10.0, defense: 5.0, speed: 5.0, health: 100.0 }
+   commands.entity(parent).add_child(id);
 }

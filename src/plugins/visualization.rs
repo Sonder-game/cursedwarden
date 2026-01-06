@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::plugins::inventory::{InventoryGridState, GridPosition, ItemRotation};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, ItemRotation, InventoryItem, rotate_shape};
 use crate::plugins::items::{ItemDatabase, ItemDefinition};
 use crate::plugins::core::GameState;
 
@@ -38,25 +38,24 @@ fn draw_synergy_lines(
 
         for synergy in &def.synergies {
             // Calculate target grid position
-            let rotated_offset_vec = InventoryGridState::get_rotated_shape(&vec![synergy.offset], rot.0);
+            let rotated_offset_vec = rotate_shape(&vec![synergy.offset], rot.0);
             if rotated_offset_vec.is_empty() { continue; }
             let rotated_offset = rotated_offset_vec[0];
             let target_pos = IVec2::new(pos.0.x, pos.0.y) + rotated_offset;
 
             // Check if occupied
-            if let Some(slot) = grid_state.slots.get(&target_pos) {
-                if let Some(target_entity) = slot.occupier {
-                    // Check tags
-                    if let Ok(target_def) = q_tags.get(target_entity) {
-                        if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
-                             // Match found! Draw line.
-                             if let Ok(target_transform) = q_transforms.get(target_entity) {
-                                 let end_pos = target_transform.translation().truncate();
+            // New logic: Check occupancy map directly
+            if let Some(target_entity) = grid_state.occupancy.get(&target_pos) {
+                // Check tags
+                if let Ok(target_def) = q_tags.get(*target_entity) {
+                    if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
+                            // Match found! Draw line.
+                            if let Ok(target_transform) = q_transforms.get(*target_entity) {
+                                let end_pos = target_transform.translation().truncate();
 
-                                 // Draw Green Line for Synergy
-                                 gizmos.line_2d(start_pos, end_pos, Color::srgb(0.0, 1.0, 0.0));
-                             }
-                        }
+                                // Draw Green Line for Synergy
+                                gizmos.line_2d(start_pos, end_pos, Color::srgb(0.0, 1.0, 0.0));
+                            }
                     }
                 }
             }
@@ -69,16 +68,16 @@ fn draw_synergy_lines(
 /// Gold: Ready (all ingredients present).
 fn draw_recipe_lines(
     mut gizmos: Gizmos,
-    q_items: Query<(Entity, &GridPosition, &ItemDefinition, &ItemRotation)>,
+    q_items: Query<(Entity, &GridPosition, &InventoryItem, &ItemRotation)>,
     item_db: Res<ItemDatabase>,
     q_transforms: Query<&GlobalTransform>,
 ) {
     if item_db.recipes.is_empty() { return; }
 
     // Collect all items on grid
-    let mut items_on_grid: Vec<(Entity, &ItemDefinition, &GridPosition, &ItemRotation)> = Vec::new();
-    for (e, pos, def, rot) in q_items.iter() {
-        items_on_grid.push((e, def, pos, rot));
+    let mut items_on_grid: Vec<(Entity, &InventoryItem, &GridPosition, &ItemRotation)> = Vec::new();
+    for (e, pos, item, rot) in q_items.iter() {
+        items_on_grid.push((e, item, pos, rot));
     }
 
     // Naive O(R * N^2) check. R=recipes, N=items. N is small (~20).
@@ -91,16 +90,16 @@ fn draw_recipe_lines(
                 let id_b = &recipe.ingredients[j];
 
                 // Find items matching id_a
-                let items_a: Vec<_> = items_on_grid.iter().filter(|(_, def, _, _)| def.id == *id_a).collect();
+                let items_a: Vec<_> = items_on_grid.iter().filter(|(_, item, _, _)| item.item_id == *id_a).collect();
                 // Find items matching id_b
-                let items_b: Vec<_> = items_on_grid.iter().filter(|(_, def, _, _)| def.id == *id_b).collect();
+                let items_b: Vec<_> = items_on_grid.iter().filter(|(_, item, _, _)| item.item_id == *id_b).collect();
 
-                for (entity_a, def_a, pos_a, rot_a) in &items_a {
-                    for (entity_b, def_b, pos_b, rot_b) in &items_b {
+                for (entity_a, item_a, pos_a, rot_a) in &items_a {
+                    for (entity_b, item_b, pos_b, rot_b) in &items_b {
                         if entity_a == entity_b { continue; }
 
                         // Check adjacency
-                        if are_adjacent(pos_a, rot_a, def_a, pos_b, rot_b, def_b) {
+                        if are_adjacent(pos_a, rot_a, item_a, pos_b, rot_b, item_b) {
                              // Draw line
                              if let (Ok(t_a), Ok(t_b)) = (q_transforms.get(*entity_a), q_transforms.get(*entity_b)) {
                                  let p1 = t_a.translation().truncate();
@@ -119,15 +118,15 @@ fn draw_recipe_lines(
 }
 
 fn are_adjacent(
-    pos_a: &GridPosition, rot_a: &ItemRotation, def_a: &ItemDefinition,
-    pos_b: &GridPosition, rot_b: &ItemRotation, def_b: &ItemDefinition
+    pos_a: &GridPosition, rot_a: &ItemRotation, item_a: &InventoryItem,
+    pos_b: &GridPosition, rot_b: &ItemRotation, item_b: &InventoryItem
 ) -> bool {
     // Get all cells for A
-    let shape_a = InventoryGridState::get_rotated_shape(&def_a.shape, rot_a.0);
+    let shape_a = rotate_shape(&item_a.base_shape, rot_a.0);
     let cells_a: Vec<IVec2> = shape_a.iter().map(|offset| IVec2::new(pos_a.0.x, pos_a.0.y) + *offset).collect();
 
     // Get all cells for B
-    let shape_b = InventoryGridState::get_rotated_shape(&def_b.shape, rot_b.0);
+    let shape_b = rotate_shape(&item_b.base_shape, rot_b.0);
     let cells_b: Vec<IVec2> = shape_b.iter().map(|offset| IVec2::new(pos_b.0.x, pos_b.0.y) + *offset).collect();
 
     // Check if any cell in A is adjacent (dist 1) to any cell in B

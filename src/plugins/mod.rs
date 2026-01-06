@@ -7,3 +7,4 @@ pub mod mutation;
 pub mod ui;
 pub mod shop;
 pub mod visualization;
+pub mod inventory_utils;
