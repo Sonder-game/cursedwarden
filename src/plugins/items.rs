@@ -22,7 +22,7 @@ pub struct ItemDefinition {
     pub name: String,
     pub width: u8,
     pub height: u8,
-    #[serde(default)] // Allow omitting shape in JSON/RON if we generate it
+    #[serde(default)]
     pub shape: Vec<IVec2>,
     #[allow(dead_code)]
     pub material: MaterialType,
