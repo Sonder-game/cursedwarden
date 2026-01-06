@@ -36,7 +36,7 @@ pub fn mutation_system(
             }
 
             // Check if valid
-            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.0.x, pos.0.y), 0, Some(entity)) {
+            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.0.x, pos.0.y), 0, Some(entity), false) {
                  // Update Grid State
                  for offset in &extension_shape {
                      let new_cell_pos = IVec2::new(pos.0.x, pos.0.y) + *offset;
