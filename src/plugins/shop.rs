@@ -252,8 +252,6 @@ fn spawn_shop_ui(
                     ));
 
                     // Visual Item Preview
-                    // We spawn a "preview" node. We might need to scale it down if it's huge?
-                    // For now, let's just create a container for it.
                     slot.spawn(Node {
                         width: Val::Px(80.0),
                         height: Val::Px(80.0), // Fixed preview box
@@ -262,15 +260,6 @@ fn spawn_shop_ui(
                         overflow: Overflow::clip(), // Clip if too big
                         ..default()
                     }).with_children(|preview| {
-                        // Spawn the visual representation inside the preview
-                        // We use (0,0) as relative pos
-                        // Note: spawn_visual_item spawns a child.
-                         // We need to pass commands to it.
-                         // But we are in a closure.
-                         // We can't easily call helper with commands.
-                         // We'll create a manual visual item here or use a command queue.
-                         // Or just manual for now since we are in `with_children`.
-
                          let w = def.width as f32 * 32.0; // Half size for preview?
                          let h = def.height as f32 * 32.0;
 
@@ -281,21 +270,14 @@ fn spawn_shop_ui(
                                    ..default()
                                },
                                BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
-                               // We don't add InventoryItem component here to avoid it being interactable in drag system?
-                               // Or we do but ignore it?
-                               // The instruction says "items in shop are same InventoryItem".
-                               // So we add it.
                                InventoryItem {
                                    item_id: def.id.clone(),
-                                   shape: def.shape.clone()
+                                   base_shape: def.shape.clone(), // Updated field name
+                                   width: def.width,
+                                   height: def.height,
                                },
                                GridPosition(IVec2::ZERO),
                                ItemRotation(0),
-                               // PickingBehavior::IGNORE so we can't drag from shop?
-                               // Or we want to drag from shop to buy?
-                               // Instruction says "Shop not as separate scene... items in shop are same InventoryItem...".
-                               // But typically shop buying is click-to-buy or drag-to-buy.
-                               // Current logic is "Buy Button". So let's ignore drag for now.
                                PickingBehavior::IGNORE,
                          ));
                     });
@@ -416,37 +398,6 @@ fn reroll_button_system(
 
                     if let Ok(root) = q_root.get_single() {
                         commands.entity(root).despawn_recursive();
-                        // Re-spawning UI in the same frame after despawn might be tricky with ownership of commands.
-                        // However, we can just call it.
-                        // But wait, spawn_shop_ui now consumes commands.
-                        // We can't do that inside a loop or system easily if we needed commands elsewhere.
-                        // But here we are at end of system.
-                        // Actually, commands is passed into system.
-                        // spawn_shop_ui(commands, ...) consumes it.
-                        // But we might need commands for other things or if this loop runs multiple times (unlikely for buttons).
-                        // It's better to NOT consume commands in spawn_shop_ui if we can avoid it.
-                        // But I changed it to consume because of lifetime issues in recursive calls?
-                        // No, the previous error was closure borrow.
-
-                        // Let's revert spawn_shop_ui to take &mut Commands and fix the closure issue by NOT using commands inside the closure if possible,
-                        // or by re-architecting the closure usage.
-                        // The issue was: commands.spawn(...).with_children(|parent| { ... commands.entity(...) ... })
-                        // Inside with_children, we use `parent` (ChildBuilder) to spawn children.
-                        // But I was using `commands.entity(slot_entity)` inside the outer loop but inside `parent` loop?
-
-                        // Let's look at the structure in `shop.rs`:
-                        /*
-                        commands.spawn(...).with_children(|parent| {
-                            ...
-                            for item in items {
-                                let slot_entity = parent.spawn(...).id();
-                                commands.entity(slot_entity).with_children(...) // ERROR: borrowing commands while commands is borrowed by parent.spawn
-                            }
-                        })
-                        */
-                        // Solution: Use `parent` to spawn slot, and `with_children` on the slot command builder directly!
-
-                        // I will revert the signature change and fix the logic.
                          spawn_shop_ui(&mut commands, &shop_state, &item_db);
                     }
                 }
@@ -507,18 +458,74 @@ fn buy_item_system(
                 let item = &mut shop_state.items[index];
                 if !item.is_sold && player_stats.thalers >= item.price {
                      if let Some(def) = item_db.items.get(&item.item_id) {
-                         if let Some(pos) = grid_state.find_free_spot(def) {
+                         // Use find_free_spot from InventoryGridState
+                         if let Some(pos) = grid_state.find_free_spot(&def.shape, def.width, def.height, None) {
                              player_stats.thalers -= item.price;
                              item.is_sold = true;
 
                              if let Ok(container) = q_container.get_single() {
+                                 // We need mutable grid_state to update it?
+                                 // spawn_item_entity doesn't update grid state itself usually,
+                                 // it just spawns entities. The grid system (rebuild) will pick it up next frame?
+                                 // Wait, spawn_item_entity took &mut GridState in previous code?
+                                 // Looking at inventory.rs: spawn_item_entity takes `_grid_state: &mut InventoryGridState`.
+                                 // And it doesn't use it except for signature match?
+                                 // Wait, I should check inventory.rs again.
+                                 // It does NOT use grid_state. It just spawns Entity with components.
+                                 // The InventoryGridState::rebuild is called by `on_drag_end` or explicitly.
+                                 // If we spawn item, we should probably trigger rebuild or rely on systems.
+                                 // InventoryGridState rebuild depends on Queries.
+                                 // So just spawning entity is enough, next frame it will be in query.
+
+                                 // However, I need to pass a Mutable reference to match the function signature I created.
+                                 // So `grid_state` needs to be `ResMut`.
+                                 // But I used `grid_state.find_free_spot` which takes `&self`.
+                                 // So `ResMut` works fine as it derefs to `&mut T` which can be used as `&T`.
+
+                                 // Ah, the issue is borrowing.
+                                 // `grid_state.find_free_spot` borrows grid_state immutably.
+                                 // `spawn_item_entity` borrows it mutably.
+                                 // I cannot do both in same scope if I hold the reference?
+                                 // Actually `pos` is Copy (IVec2). So the borrow ends after `find_free_spot`.
+
+                                 // But wait, `find_free_spot` implementation calls `can_place_item`.
+
+                                 // Let's ensure `spawn_item_entity` signature is what I think it is.
+                                 // inventory.rs:
+                                 // pub fn spawn_item_entity(..., _grid_state: &mut InventoryGridState, ...)
+
+                                 // So I need ResMut.
+                                 // I'll fix the code below to use ResMut and ensure no borrow conflict.
+
+                                 // Wait, `spawn_item_entity` is called inside the `if let Some(pos)` block.
+
+                                 /*
+                                 if let Some(pos) = grid_state.find_free_spot(...) { // borrow starts and ends here?
+                                     // ...
+                                     spawn_item_entity(..., &mut grid_state); // borrow mutably here
+                                 }
+                                 */
+                                 // This is fine in Rust if the return value of find_free_spot doesn't borrow from self.
+                                 // IVec2 does not borrow.
+
+                                 // One catch: `spawn_item_entity` uses `_grid_state`. The `_` implies unused.
+                                 // I can just pass `&mut grid_state` (if I have ResMut).
+
+                                 // I will assume I need ResMut in the system signature.
+
+                                 let mut dummy_grid_state = InventoryGridState::default(); // Hack if I can't get mut access due to usage above?
+                                 // No, I can use `grid_state` if I have `ResMut`.
+
+                                 // Wait, I changed the system signature to Res instead of ResMut in the comment above.
+                                 // I will change it back to ResMut in the actual write.
+
                                  spawn_item_entity(
                                      &mut commands,
                                      container,
                                      def,
                                      pos,
                                      0,
-                                     &mut grid_state
+                                     &mut *grid_state // Deref mut
                                  );
                              }
 

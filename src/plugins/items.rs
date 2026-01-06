@@ -25,8 +25,10 @@ pub struct ItemDefinition {
     #[serde(default)] // Allow omitting shape in JSON/RON if we generate it
     pub shape: Vec<IVec2>,
     #[allow(dead_code)]
+    #[serde(default)]
     pub material: MaterialType,
     #[allow(dead_code)]
+    #[serde(default)]
     pub item_type: ItemType,
 
     #[serde(default)]
@@ -309,7 +311,7 @@ fn load_items(mut item_db: ResMut<ItemDatabase>) {
         ItemDefinition {
             id: "starter_bag".to_string(),
             name: "Starter Bag".to_string(),
-            width: 3,
+            width: 3, // Restored to reasonable default
             height: 3,
             shape: vec![],
             material: MaterialType::Flesh, // Leather
