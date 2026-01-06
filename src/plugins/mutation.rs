@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::plugins::inventory::{InventoryGridState, InventoryItem, GridPosition, ItemRotation, InventoryPlugin, rotate_shape};
+use crate::plugins::inventory::{InventoryGridState, InventoryItem, GridPosition, ItemRotation, rotate_shape};
 use rand::Rng;
 
 pub struct MutationPlugin;

@@ -214,8 +214,8 @@ impl InventoryGridState {
     pub fn find_free_spot(
         &self,
         item_shape: &[IVec2],
-        width: u8,
-        height: u8,
+        _width: u8,
+        _height: u8,
         preferred_pos: Option<IVec2>,
     ) -> Option<IVec2> {
         // Optimization: iterate within bounds
@@ -313,7 +313,7 @@ fn on_drag_end(
    mut commands: Commands,
    // Use ParamSet to resolve borrow conflicts
    mut queries: ParamSet<(
-       Query<(Entity, &mut Node, &mut GridPosition, &mut ItemRotation, &InventoryItem, Option<&Bag>, Has<InStorage>)>, // Mutable
+       Query<(Entity, &Node, &mut GridPosition, &mut ItemRotation, &InventoryItem, Option<&Bag>, Has<InStorage>)>, // Mutable
        (
            Query<(Entity, &GridPosition, &ItemRotation, &Bag)>, // Bags Read-Only
            Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>> // Items Read-Only
@@ -321,7 +321,6 @@ fn on_drag_end(
    )>,
    mut grid_state: ResMut<InventoryGridState>,
    mut interaction: ResMut<InteractionState>,
-   _q_container: Query<(&Node, &GlobalTransform), With<InventoryGridContainer>>,
    mut ev_changed: EventWriter<InventoryChangedEvent>,
 ) {
    let entity = trigger.entity();
@@ -334,7 +333,7 @@ fn on_drag_end(
 
    {
        let mut q_mutable = queries.p0();
-       if let Ok((_, mut node, mut grid_pos, mut rot, item_def, is_bag, _)) = q_mutable.get_mut(entity) {
+       if let Ok((_, node, mut grid_pos, mut rot, item_def, is_bag, _)) = q_mutable.get_mut(entity) {
            // Determine current Node coordinates
            let current_left = if let Val::Px(l) = node.left { l } else { 0.0 };
            let current_top = if let Val::Px(t) = node.top { t } else { 0.0 };
@@ -417,7 +416,7 @@ fn update_item_transforms(
 
 /// Runs every frame during Drag: provides tint (Green/Red) and rotation
 fn update_drag_visuals(
-   mut interaction: ResMut<InteractionState>,
+   interaction: Res<InteractionState>,
    mut q_dragged: Query<(&mut Node, &mut BackgroundColor, &mut ItemRotation, &InventoryItem, Option<&Bag>)>,
    grid_state: Res<InventoryGridState>,
    input: Res<ButtonInput<KeyCode>>,
