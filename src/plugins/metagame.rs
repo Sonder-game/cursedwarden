@@ -51,7 +51,7 @@ impl Default for GlobalTime {
 
 // Plugin
 use crate::plugins::core::{GameState, DaySubState};
-use crate::plugins::inventory::{InventoryGridState, GridPosition, Item, ItemRotation, InventoryItem, spawn_item_entity, InventoryGridContainer};
+use crate::plugins::inventory::{InventoryGridState, GridPosition, ItemRotation, InventoryItem, spawn_item_entity, InventoryGridContainer};
 use crate::plugins::items::{ItemDatabase, ItemType};
 use std::fs::File;
 use std::io::{Write, Read};
@@ -227,7 +227,7 @@ fn day_start_logic() {
 pub fn create_save_data(
     player_stats: &PlayerStats,
     global_time: &GlobalTime,
-    q_items: &Query<(&InventoryItem, &GridPosition, &ItemRotation), With<Item>>,
+    q_items: &Query<(&InventoryItem, &GridPosition, &ItemRotation)>,
 ) -> SaveData {
     let mut saved_items = Vec::new();
     for (item, pos, rot) in q_items.iter() {
@@ -250,7 +250,7 @@ fn save_system(
     input: Res<ButtonInput<KeyCode>>,
     player_stats: Res<PlayerStats>,
     global_time: Res<GlobalTime>,
-    q_items: Query<(&InventoryItem, &GridPosition, &ItemRotation), With<Item>>,
+    q_items: Query<(&InventoryItem, &GridPosition, &ItemRotation)>,
 ) {
     if input.just_pressed(KeyCode::F5) {
         let save_data = create_save_data(&player_stats, &global_time, &q_items);
@@ -279,7 +279,7 @@ fn load_system_debug(
     mut global_time: ResMut<GlobalTime>,
     mut grid_state: ResMut<InventoryGridState>,
     item_db: Res<ItemDatabase>,
-    q_items: Query<Entity, With<Item>>,
+    q_items: Query<Entity, With<InventoryItem>>,
     q_container: Query<Entity, With<InventoryGridContainer>>,
 ) {
     if input.just_pressed(KeyCode::F9) {
