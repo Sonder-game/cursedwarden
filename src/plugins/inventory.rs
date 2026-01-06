@@ -4,6 +4,7 @@ use crate::plugins::core::GameState;
 use crate::plugins::items::{ItemDefinition, ItemType, SynergyEffect, StatType};
 use crate::plugins::metagame::PersistentInventory;
 
+/// Plugin managing inventory logic, grid state, and interactions.
 pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
@@ -14,7 +15,7 @@ impl Plugin for InventoryPlugin {
           .init_resource::<DragState>()
            // Events
           .add_event::<InventoryChangedEvent>()
-          .add_event::<ItemSpawnedEvent>()
+          .add_event::<ItemSpawnedEvent>() // Kept for compatibility if needed
            // Systems
           .add_systems(OnEnter(GameState::EveningPhase), setup_inventory_ui)
           .add_systems(OnExit(GameState::EveningPhase), cleanup_inventory)
@@ -27,7 +28,7 @@ impl Plugin for InventoryPlugin {
                    debug_grid_gizmos,
                ).run_if(in_state(GameState::EveningPhase))
            )
-           // Observers
+           // Observers (Bevy 0.15 Picking)
           .add_observer(on_drag_start)
           .add_observer(on_drag)
           .add_observer(on_drag_end);
@@ -38,50 +39,62 @@ impl Plugin for InventoryPlugin {
 // COMPONENTS
 // ============================================================================
 
-/// Marker for backward compatibility and querying
+/// Main component for inventory item.
+#[derive(Component)]
+pub struct InventoryItem {
+   pub item_id: String,
+   /// List of relative coordinates (offsets) occupied by the item.
+   /// (0,0) is the anchor.
+   pub shape: Vec<IVec2>,
+}
+
+/// Component for Bag items that provider slots.
+#[derive(Component)]
+pub struct Bag {
+   /// Shape of slots provided by this bag (relative to anchor).
+   pub provided_slots: Vec<IVec2>,
+}
+
+/// Logical grid position.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct GridPosition(pub IVec2);
+
+/// Item rotation: 0=0°, 1=90°, 2=180°, 3=270°.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ItemRotation(pub u8);
+
+/// Marker for items inside the "Storage" (Limbo) area.
+#[derive(Component)]
+pub struct InStorage;
+
+/// Marker for UI root.
+#[derive(Component)]
+struct InventoryRoot;
+
+/// Marker for the active grid area.
+#[derive(Component)]
+pub struct InventoryGridContainer;
+
+/// Marker for the storage area.
+#[derive(Component)]
+pub struct StorageContainer;
+
+// --- Legacy / Compatibility Components ---
+
 #[derive(Component)]
 pub struct Item;
 
-/// Marker for backward compatibility
 #[derive(Component, Debug)]
 pub struct ItemSize {
     pub width: i32,
     pub height: i32,
 }
 
-/// Event triggered when item is spawned
 #[derive(Event)]
 pub struct ItemSpawnedEvent(pub Entity);
 
-/// Main component for inventory item
-#[derive(Component)]
-pub struct InventoryItem {
-   pub item_id: String,
-   /// Base shape (list of offsets from 0,0)
-   pub shape: Vec<IVec2>,
-}
-
-#[derive(Component)]
-pub struct Bag {
-   pub provided_slots: Vec<IVec2>,
-}
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct GridPosition(pub IVec2);
-
-// Make sure to access 'value' for backward compat or just alias
-#[derive(Component, Clone, Copy, Debug)]
-pub struct ItemRotation(pub u8);
-
-#[derive(Component)]
-struct InventoryRoot;
-
-/// Marker for the grid container area
-#[derive(Component)]
-pub struct InventoryGridContainer;
-
 // ============================================================================
-// RESOURCES AND STATE
+// RESOURCES
 // ============================================================================
 
 #[derive(Resource, Default)]
@@ -96,18 +109,12 @@ pub struct SlotData {
    pub occupier: Option<Entity>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum CellState {
-    Free,
-    Occupied(Entity),
-}
-
 #[derive(Resource, Default)]
 pub struct DragState {
    pub original_pos: Option<IVec2>,
    pub original_rotation: Option<u8>,
+   pub was_in_storage: bool,
    pub attached_items: Vec<Entity>,
-   pub drag_offset: Vec2,
 }
 
 #[derive(Event)]
@@ -116,33 +123,35 @@ pub struct InventoryChangedEvent;
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-
 const SLOT_SIZE: f32 = 64.0;
 const SLOT_GAP: f32 = 2.0;
 const TOTAL_CELL_SIZE: f32 = SLOT_SIZE + SLOT_GAP;
+#[allow(dead_code)]
+const STORAGE_OFFSET_Y: i32 = 10;
 
 // ============================================================================
 // GRID LOGIC
 // ============================================================================
 
 impl InventoryGridState {
-    // Helper to rotate a shape (Static version for external use)
-   pub fn get_rotated_shape(shape: &Vec<IVec2>, rotation_step: u8) -> Vec<IVec2> {
-       rotate_shape(shape, rotation_step)
+   pub fn get_rotated_shape(shape: &Vec<IVec2>, rot: u8) -> Vec<IVec2> {
+       rotate_shape(shape, rot)
    }
 
    pub fn rebuild(
        &mut self,
-       q_bags: &Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
-       q_items: &Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>,
+       q_bags: &Query<(Entity, &GridPosition, &ItemRotation, &Bag), Without<InStorage>>,
+       q_items: &Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), (Without<Bag>, Without<InStorage>)>,
    ) {
        self.slots.clear();
        self.bounds = IRect::new(0, 0, 0, 0);
 
+       // 1. Project Bags
        for (bag_entity, bag_pos, bag_rot, bag) in q_bags.iter() {
            let shape = rotate_shape(&bag.provided_slots, bag_rot.0);
            for offset in shape {
                let slot_pos = bag_pos.0 + offset;
+               // Last bag wins if overlapping
                self.slots.insert(slot_pos, SlotData {
                    bag_entity,
                    occupier: None,
@@ -152,17 +161,17 @@ impl InventoryGridState {
            }
        }
 
+       // 2. Place Items
        for (item_entity, item_pos, item_rot, item) in q_items.iter() {
            let shape = rotate_shape(&item.shape, item_rot.0);
            for offset in shape {
                let cell_pos = item_pos.0 + offset;
+
                if let Some(slot) = self.slots.get_mut(&cell_pos) {
                    if slot.occupier.is_some() {
-                       warn!("Double occupancy at {:?} by item {:?}", cell_pos, item_entity);
+                       warn!("Collision at {:?} by item {:?}", cell_pos, item_entity);
                    }
                    slot.occupier = Some(item_entity);
-               } else {
-                   warn!("Item {:?} at {:?} is floating (no bag)", item_entity, cell_pos);
                }
            }
        }
@@ -174,10 +183,17 @@ impl InventoryGridState {
        pos: IVec2,
        rot: u8,
        exclude_entity: Option<Entity>,
+       target_is_storage: bool,
    ) -> bool {
+       if target_is_storage {
+           return true; // Simplified storage logic
+       }
+
        let rotated_shape = rotate_shape(shape, rot);
+
        for offset in rotated_shape {
            let target_pos = pos + offset;
+
            match self.slots.get(&target_pos) {
                Some(slot) => {
                    if let Some(occupier) = slot.occupier {
@@ -186,7 +202,7 @@ impl InventoryGridState {
                        }
                    }
                },
-               None => return false,
+               None => return false, // No bag underneath
            }
        }
        true
@@ -204,23 +220,22 @@ impl InventoryGridState {
            let target_pos = pos + offset;
            if let Some(slot) = self.slots.get(&target_pos) {
                if Some(slot.bag_entity) != exclude_bag {
-                   return false;
+                   return false; // Overlapping another bag
                }
            }
        }
        true
    }
 
-   // Compatibility helper
    pub fn find_free_spot(&self, def: &ItemDefinition) -> Option<IVec2> {
-        // Iterate through all known slots bounds
         let min = self.bounds.min;
         let max = self.bounds.max;
 
         for y in min.y..=max.y {
             for x in min.x..=max.x {
                 let pos = IVec2::new(x, y);
-                if self.can_place_item(&def.shape, pos, 0, None) {
+                // Try rotation 0
+                if self.can_place_item(&def.shape, pos, 0, None, false) {
                     return Some(pos);
                 }
             }
@@ -242,8 +257,30 @@ fn rotate_shape(shape: &Vec<IVec2>, rot: u8) -> Vec<IVec2> {
    }).collect()
 }
 
+fn calculate_bounding_box(shape: &Vec<IVec2>, rotation_step: u8) -> (i32, i32, i32, i32) {
+    let rotated_shape = rotate_shape(shape, rotation_step);
+    if rotated_shape.is_empty() {
+        return (0, 0, 1, 1);
+    }
+
+    let mut min_x = rotated_shape[0].x;
+    let mut max_x = rotated_shape[0].x;
+    let mut min_y = rotated_shape[0].y;
+    let mut max_y = rotated_shape[0].y;
+
+    for p in &rotated_shape {
+        if p.x < min_x { min_x = p.x; }
+        if p.x > max_x { max_x = p.x; }
+        if p.y < min_y { min_y = p.y; }
+        if p.y > max_y { max_y = p.y; }
+    }
+
+    (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+}
+
+
 // ============================================================================
-// HELPER FUNCTIONS
+// PUBLIC HELPERS (Compatibility)
 // ============================================================================
 
 pub fn spawn_item_entity(
@@ -252,23 +289,19 @@ pub fn spawn_item_entity(
     def: &ItemDefinition,
     pos: IVec2,
     rotation: u8,
-    _grid_state: &mut InventoryGridState, // Note: Not used directly for validation here to avoid ownership issues, but kept signature
+    _grid_state: &mut InventoryGridState,
 ) {
     let (_min_x, _min_y, width_slots, height_slots) = calculate_bounding_box(&def.shape, rotation);
 
-    let width_px = width_slots as f32 * TOTAL_CELL_SIZE - SLOT_GAP;
-    let height_px = height_slots as f32 * TOTAL_CELL_SIZE - SLOT_GAP;
+    let width_px = width_slots as f32 * 64.0; // Fixed size based on 64px
+    let height_px = height_slots as f32 * 64.0;
 
-    // Position logic
-    let left = pos.x as f32 * TOTAL_CELL_SIZE;
-    let top = pos.y as f32 * TOTAL_CELL_SIZE;
+    let left = pos.x as f32 * 64.0;
+    let top = pos.y as f32 * 64.0;
 
     let is_bag = matches!(def.item_type, ItemType::Bag { .. });
     let z_idx = if is_bag { ZIndex(1) } else { ZIndex(10) };
     let bg_color = if is_bag { Color::srgb(0.4, 0.2, 0.1) } else { Color::srgb(0.5, 0.5, 0.8) };
-
-    // Prepare shape/components
-    let shape = def.shape.clone();
 
     let mut entity_cmds = commands.spawn((
         Node {
@@ -277,30 +310,27 @@ pub fn spawn_item_entity(
             position_type: PositionType::Absolute,
             left: Val::Px(left),
             top: Val::Px(top),
-            border: UiRect::all(Val::Px(2.0)),
+            border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
         BackgroundColor(bg_color),
-        BorderColor(Color::WHITE), // Default border
         InventoryItem {
             item_id: def.id.clone(),
-            shape: shape.clone(),
+            shape: def.shape.clone(),
         },
         GridPosition(pos),
         ItemRotation(rotation),
         z_idx,
         PickingBehavior::default(),
-        // Add backward compat components
+        // Legacy components
         Item,
         ItemSize { width: width_slots, height: height_slots },
     ));
 
     if is_bag {
-        // Assume bags provide their shape as slots for now
-        entity_cmds.insert(Bag { provided_slots: shape });
+        entity_cmds.insert(Bag { provided_slots: def.shape.clone() });
     }
 
-    // Child text
     entity_cmds.with_children(|parent| {
          parent.spawn((
              Text::new(&def.name),
@@ -338,16 +368,14 @@ pub fn calculate_combat_stats(
         health: 0.0,
     };
 
-    // Reconstruct Grid State
     let mut temp_grid = InventoryGridState::default();
 
     // 1. Place Bags
-    let mut bag_map = HashMap::new(); // Entity -> BagDef
+    let mut bag_map = HashMap::new();
     for (i, saved_item) in inventory.items.iter().enumerate() {
         if let Some(def) = item_db.items.get(&saved_item.item_id) {
             if matches!(def.item_type, ItemType::Bag { .. }) {
-                // Fake Entity
-                let entity = Entity::from_raw(i as u32);
+                let entity = Entity::from_raw(i as u32); // Fake entity
                 let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
                 let shape = InventoryGridState::get_rotated_shape(&def.shape, saved_item.rotation);
 
@@ -365,14 +393,14 @@ pub fn calculate_combat_stats(
     }
 
     // 2. Place Items
-    let mut item_entities = Vec::new(); // (Entity, Def, Pos, Rot)
+    let mut item_entities = Vec::new();
     for (i, saved_item) in inventory.items.iter().enumerate() {
         if let Some(def) = item_db.items.get(&saved_item.item_id) {
             if !matches!(def.item_type, ItemType::Bag { .. }) {
                 let entity = Entity::from_raw(i as u32);
                 let pos = IVec2::new(saved_item.grid_x, saved_item.grid_y);
                 let rot = saved_item.rotation;
-                
+
                 item_entities.push((entity, def, pos, rot));
 
                 let shape = InventoryGridState::get_rotated_shape(&def.shape, rot);
@@ -386,53 +414,8 @@ pub fn calculate_combat_stats(
         }
     }
 
-    // 3. Calculate Stats & Synergies
+    // 3. Stats and Synergies
     let item_lookup: HashMap<Entity, &ItemDefinition> = item_entities.iter().map(|(e, d, _, _)| (*e, *d)).collect();
-
-    // This loop was unused in previous code and caused warnings.
-    // Commented out as it seems redundant given the next loop does the full bonus calculation.
-    /*
-    for (entity, def, pos, rot) in &item_entities {
-        let mut item_attack = def.attack;
-        let mut item_defense = def.defense;
-        let mut item_speed = def.speed;
-        let mut item_health = 0.0; // Items usually don't have health but maybe?
-
-        // Check Synergies
-        for synergy in &def.synergies {
-            let shape = InventoryGridState::get_rotated_shape(&vec![synergy.offset], *rot);
-            if shape.is_empty() { continue; }
-            let target_pos = *pos + shape[0];
-
-            if let Some(slot) = temp_grid.slots.get(&target_pos) {
-                if let Some(target_entity) = slot.occupier {
-                    if let Some(target_def) = item_lookup.get(&target_entity) {
-                        if synergy.target_tags.iter().any(|req| target_def.tags.contains(req)) {
-                            // Apply Effect
-                            match synergy.effect {
-                                SynergyEffect::BuffSelf { stat, value } => {
-                                    match stat {
-                                        StatType::Attack => item_attack += value,
-                                        StatType::Defense => item_defense += value,
-                                        StatType::Speed => item_speed += value,
-                                        StatType::Health => item_health += value,
-                                    }
-                                },
-                                // Note: BuffTarget requires us to find the TARGET item in our iteration list and update it.
-                                // Simplification: We only process Self buffs here OR we process bonuses in a separate pass?
-                                // "BuffTarget" means THIS item buffs the NEIGHBOR.
-                                // To do this correctly, we need a map of bonuses.
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    */
-
-    // COMPLETE CALCULATION WITH MAP
     let mut bonuses: HashMap<Entity, CombatStats> = HashMap::new();
 
     for (entity, def, pos, rot) in &item_entities {
@@ -473,12 +456,10 @@ pub fn calculate_combat_stats(
         }
     }
 
-    // Sum Final Stats
     for (entity, def, _, _) in &item_entities {
         stats.attack += def.attack;
         stats.defense += def.defense;
         stats.speed += def.speed;
-        // stats.health += def.health; // if defined
 
         if let Some(bonus) = bonuses.get(entity) {
             stats.attack += bonus.attack;
@@ -491,51 +472,39 @@ pub fn calculate_combat_stats(
     stats
 }
 
-fn calculate_bounding_box(shape: &Vec<IVec2>, rotation_step: u8) -> (i32, i32, i32, i32) {
-    let rotated_shape = rotate_shape(shape, rotation_step);
-    if rotated_shape.is_empty() {
-        return (0, 0, 1, 1);
-    }
-
-    let mut min_x = rotated_shape[0].x;
-    let mut max_x = rotated_shape[0].x;
-    let mut min_y = rotated_shape[0].y;
-    let mut max_y = rotated_shape[0].y;
-
-    for p in &rotated_shape {
-        if p.x < min_x { min_x = p.x; }
-        if p.x > max_x { max_x = p.x; }
-        if p.y < min_y { min_y = p.y; }
-        if p.y > max_y { max_y = p.y; }
-    }
-
-    (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
-}
-
-
 // ============================================================================
-// SYSTEMS BEVY PICKING (DRAG & DROP)
+// DRAG AND DROP SYSTEMS (Observers)
 // ============================================================================
 
 fn on_drag_start(
    trigger: Trigger<Pointer<DragStart>>,
    mut commands: Commands,
-   q_items: Query<(Entity, &GridPosition, &ItemRotation, Option<&Bag>), With<InventoryItem>>,
+   q_items: Query<(Entity, &GridPosition, &ItemRotation, Option<&Bag>, Has<InStorage>), With<InventoryItem>>,
    mut drag_state: ResMut<DragState>,
    mut q_node: Query<(&mut ZIndex, &Node)>,
+   grid_state: Res<InventoryGridState>,
 ) {
    let entity = trigger.entity();
 
-   if let Ok((_e, grid_pos, rot, is_bag)) = q_items.get(entity) {
+   if let Ok((_e, grid_pos, rot, is_bag, in_storage)) = q_items.get(entity) {
        drag_state.original_pos = Some(grid_pos.0);
        drag_state.original_rotation = Some(rot.0);
+       drag_state.was_in_storage = in_storage;
        drag_state.attached_items.clear();
 
-       if is_bag.is_some() {
-           // Bag logic placeholder
+       if is_bag.is_some() && !in_storage {
+           for (slot_pos, slot_data) in &grid_state.slots {
+               if slot_data.bag_entity == entity {
+                   if let Some(occupier) = slot_data.occupier {
+                       if !drag_state.attached_items.contains(&occupier) {
+                           drag_state.attached_items.push(occupier);
+                       }
+                   }
+               }
+           }
        }
 
-       if let Ok((mut z_index, _node)) = q_node.get_mut(entity) {
+       if let Ok((mut z_index, _)) = q_node.get_mut(entity) {
            *z_index = ZIndex(100);
        }
 
@@ -564,11 +533,11 @@ fn on_drag_end(
    trigger: Trigger<Pointer<DragEnd>>,
    mut commands: Commands,
    mut queries: ParamSet<(
-        Query<(Entity, &mut GridPosition, &mut ItemRotation, &InventoryItem, &Node, Option<&Bag>)>,
-        (
-            Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
-            Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>
-        )
+       Query<(Entity, &mut GridPosition, &mut ItemRotation, &InventoryItem, &Node, Option<&Bag>, Has<InStorage>)>, // Mutable
+       (
+           Query<(Entity, &GridPosition, &ItemRotation, &Bag), Without<InStorage>>, // Bags Read-Only
+           Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), (Without<Bag>, Without<InStorage>)> // Items Read-Only
+       )
    )>,
    mut grid_state: ResMut<InventoryGridState>,
    drag_state: Res<DragState>,
@@ -576,16 +545,19 @@ fn on_drag_end(
 ) {
    let entity = trigger.entity();
 
-   // Because we can't easily query mutably and immutably at same time for Bag Content logic,
-   // we will do a simpler check.
+   commands.entity(entity).remove::<PickingBehavior>();
 
-   // Access mutable query for the dragged item
+   let mut success = false;
+   let mut delta = IVec2::ZERO;
+
    {
-       let mut q_items = queries.p0();
-       if let Ok((_e, mut grid_pos, mut rot, item_def, node, is_bag)) = q_items.get_mut(entity) {
-           commands.entity(entity).remove::<PickingBehavior>();
+       let mut q_mutable = queries.p0();
+       if let Ok((_, mut grid_pos, mut rot, item_def, node, is_bag, _)) = q_mutable.get_mut(entity) {
+
            let current_left = if let Val::Px(v) = node.left { v } else { 0.0 };
            let current_top = if let Val::Px(v) = node.top { v } else { 0.0 };
+
+           let is_storage_drop = current_top > 400.0; // Threshold for storage
 
            let target_x = (current_left / TOTAL_CELL_SIZE).round() as i32;
            let target_y = (current_top / TOTAL_CELL_SIZE).round() as i32;
@@ -593,25 +565,31 @@ fn on_drag_end(
 
            let mut valid = false;
 
-           if let Some(bag) = is_bag {
-               if grid_state.can_place_bag(&bag_def_to_shape(&bag.provided_slots), target_pos, rot.0, Some(entity)) {
-                   valid = true;
-               }
+           if is_storage_drop {
+               commands.entity(entity).insert(InStorage);
+               valid = true;
            } else {
-               if grid_state.can_place_item(&item_def.shape, target_pos, rot.0, Some(entity)) {
-                   valid = true;
+               commands.entity(entity).remove::<InStorage>();
+
+               if let Some(bag) = is_bag {
+                   if grid_state.can_place_bag(&bag.provided_slots, target_pos, rot.0, Some(entity)) {
+                       valid = true;
+                   }
+               } else {
+                   if grid_state.can_place_item(&item_def.shape, target_pos, rot.0, Some(entity), false) {
+                       valid = true;
+                   }
                }
            }
 
            if valid {
-               if is_bag.is_some() {
-                   let delta = target_pos - drag_state.original_pos.unwrap_or(target_pos);
-                   if delta != IVec2::ZERO {
-                       // move_bag_contents placeholder
-                   }
+               if is_bag.is_some() && !is_storage_drop {
+                    delta = target_pos - drag_state.original_pos.unwrap_or(target_pos);
                }
+
                grid_pos.0 = target_pos;
                ev_changed.send(InventoryChangedEvent);
+               success = true;
            } else {
                if let Some(orig) = drag_state.original_pos {
                    grid_pos.0 = orig;
@@ -619,31 +597,30 @@ fn on_drag_end(
                if let Some(orig_rot) = drag_state.original_rotation {
                    rot.0 = orig_rot;
                }
+               if drag_state.was_in_storage {
+                    commands.entity(entity).insert(InStorage);
+               } else {
+                    commands.entity(entity).remove::<InStorage>();
+               }
            }
        }
    }
 
-   // Access read-only queries for rebuild
-   let (q_bags_ro, q_items_ro) = queries.p1();
-   grid_state.rebuild_unified(&q_items_ro, &q_bags_ro);
-}
+   if success && delta != IVec2::ZERO {
+       let mut q_mutable = queries.p0();
+       for attached_entity in &drag_state.attached_items {
+            if let Ok((_, mut item_pos, _, _, _, _, _)) = q_mutable.get_mut(*attached_entity) {
+                item_pos.0 += delta;
+            }
+       }
+   }
 
-impl InventoryGridState {
-    pub fn rebuild_unified(
-        &mut self,
-        q_items: &Query<(Entity, &GridPosition, &ItemRotation, &InventoryItem), Without<Bag>>,
-        q_bags: &Query<(Entity, &GridPosition, &ItemRotation, &Bag)>,
-    ) {
-        self.rebuild(q_bags, q_items);
-    }
-}
-
-fn bag_def_to_shape(vec: &Vec<IVec2>) -> Vec<IVec2> {
-   vec.clone()
+   let (q_bags, q_items) = queries.p1();
+   grid_state.rebuild(&q_bags, &q_items);
 }
 
 // ============================================================================
-// UPDATE SYSTEMS
+// VISUAL SYSTEMS
 // ============================================================================
 
 fn update_grid_visuals(
@@ -663,10 +640,10 @@ fn update_grid_visuals(
 
 fn handle_keyboard_rotation(
    input: Res<ButtonInput<KeyCode>>,
-   mut q_items: Query<(&mut ItemRotation, &mut Node, &InventoryItem, &PickingBehavior)>,
+   mut q_items: Query<(&mut ItemRotation, &mut Node), With<PickingBehavior>>,
 ) {
    if input.just_pressed(KeyCode::KeyR) {
-       for (mut rot, mut node, _item, _) in q_items.iter_mut() {
+       for (mut rot, mut node) in q_items.iter_mut() {
            rot.0 = (rot.0 + 1) % 4;
            let temp = node.width;
            node.width = node.height;
@@ -675,70 +652,56 @@ fn handle_keyboard_rotation(
    }
 }
 
+// ============================================================================
+// UI SETUP
+// ============================================================================
+
 fn setup_inventory_ui(mut commands: Commands) {
    commands.spawn((
        Node {
            width: Val::Percent(100.0),
            height: Val::Percent(100.0),
-           justify_content: JustifyContent::Center,
+           justify_content: JustifyContent::FlexStart,
            align_items: AlignItems::Center,
+           flex_direction: FlexDirection::Column,
            ..default()
        },
        InventoryRoot,
    )).with_children(|parent| {
+       // 1. Grid Area
        parent.spawn((
            Node {
                width: Val::Px(800.0),
-               height: Val::Px(600.0),
+               height: Val::Px(400.0),
+               position_type: PositionType::Relative,
+               border: UiRect::all(Val::Px(2.0)),
+               margin: UiRect::bottom(Val::Px(20.0)),
+               ..default()
+           },
+           InventoryGridContainer,
+           BackgroundColor(Color::srgb(0.2, 0.2, 0.2)),
+       ));
+
+       // 2. Storage Area
+       parent.spawn((
+            Node {
+               width: Val::Px(800.0),
+               height: Val::Px(200.0),
                position_type: PositionType::Relative,
                border: UiRect::all(Val::Px(2.0)),
                ..default()
            },
-           InventoryGridContainer, // Add marker
-       )).with_children(|grid_area| {
-           spawn_test_bag(grid_area, IVec2::new(2, 2));
-           spawn_test_item(grid_area, IVec2::new(2, 2));
+           StorageContainer,
+           BackgroundColor(Color::srgb(0.15, 0.15, 0.25)),
+       )).with_children(|p| {
+            p.spawn((
+               Text::new("STORAGE (LIMBO)"),
+               TextFont { font_size: 20.0, ..default() },
+               TextColor(Color::WHITE),
+               Node { position_type: PositionType::Absolute, top: Val::Px(5.0), left: Val::Px(5.0), ..default() },
+            ));
        });
    });
-}
-
-fn spawn_test_bag(parent: &mut ChildBuilder, pos: IVec2) {
-   let shape = vec![IVec2::new(0,0), IVec2::new(1,0), IVec2::new(0,1), IVec2::new(1,1)];
-   parent.spawn((
-       InventoryItem { item_id: "bag_starter".into(), shape: shape.clone() },
-       Bag { provided_slots: shape },
-       GridPosition(pos),
-       ItemRotation(0),
-       Node {
-           position_type: PositionType::Absolute,
-           width: Val::Px(2.0 * TOTAL_CELL_SIZE - SLOT_GAP),
-           height: Val::Px(2.0 * TOTAL_CELL_SIZE - SLOT_GAP),
-           left: Val::Px(pos.x as f32 * TOTAL_CELL_SIZE),
-           top: Val::Px(pos.y as f32 * TOTAL_CELL_SIZE),
-           ..default()
-       },
-       BackgroundColor(Color::srgb(0.5, 0.3, 0.1)),
-       PickingBehavior::default(),
-   ));
-}
-
-fn spawn_test_item(parent: &mut ChildBuilder, pos: IVec2) {
-   let shape = vec![IVec2::new(0,0), IVec2::new(0,1)];
-   parent.spawn((
-       InventoryItem { item_id: "sword".into(), shape },
-       GridPosition(pos),
-       ItemRotation(0),
-       Node {
-           position_type: PositionType::Absolute,
-           width: Val::Px(1.0 * TOTAL_CELL_SIZE - SLOT_GAP),
-           height: Val::Px(2.0 * TOTAL_CELL_SIZE - SLOT_GAP),
-           left: Val::Px(pos.x as f32 * TOTAL_CELL_SIZE),
-           top: Val::Px(pos.y as f32 * TOTAL_CELL_SIZE),
-           ..default()
-       },
-       BackgroundColor(Color::srgb(0.8, 0.8, 0.9)),
-       PickingBehavior::default(),
-   ));
 }
 
 fn cleanup_inventory(mut commands: Commands, q: Query<Entity, With<InventoryRoot>>) {
@@ -747,8 +710,4 @@ fn cleanup_inventory(mut commands: Commands, q: Query<Entity, With<InventoryRoot
    }
 }
 
-fn debug_grid_gizmos(
-   _gizmos: Gizmos,
-   _grid_state: Res<InventoryGridState>,
-) {
-}
+fn debug_grid_gizmos(_gizmos: Gizmos) {}
