@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use crate::plugins::inventory::{InventoryGridState, Item, ItemSize, GridPosition};
+use crate::plugins::inventory::{InventoryGridState, InventoryItem, GridPosition, ItemRotation};
 use rand::Rng;
 
 pub fn mutation_system(
-    mut q_items: Query<(Entity, &mut ItemSize, &GridPosition), With<Item>>,
+    mut q_items: Query<(Entity, &mut InventoryItem, &GridPosition, &ItemRotation)>,
     mut grid_state: ResMut<InventoryGridState>,
     // In a real implementation, we'd check infection level here
     // infection: Res<GlobalInfection>,
@@ -16,43 +16,50 @@ pub fn mutation_system(
     // GDD: P_mut = Base + Infection * 0.5. Let's assume 10% base chance for verification.
     let mutation_chance = 0.10;
 
-    for (entity, mut size, pos) in q_items.iter_mut() {
+    for (entity, mut item, pos, rot) in q_items.iter_mut() {
         if rng.gen_bool(mutation_chance) {
             info!("Item {:?} is mutating!", entity);
 
-            // Mutation: Grow in size (e.g., width + 1)
-            // We need to check if the new size fits.
-            // But we are using shapes now.
-            // For now, assume growth extends the shape to the right by 1 column for all rows in current shape?
-            // Or just check if there is a slot to the right of the current bounding box?
-            // "Stage 1" just wants grid logic. The mutation logic is legacy/extra.
-            // I'll make a best effort to keep it working with the new system.
+            // Mutation: Grow in size.
+            // With arbitrary shapes, "growth" is adding a block adjacent to the current shape.
+            // Let's try to add a block to the right of the rightmost block in the shape.
 
-            // Check if (x + width, y) is free for all y in 0..height
-            // We'll construct a shape representing the new column.
-            let mut extension_shape = Vec::new();
-            for dy in 0..size.height {
-                 extension_shape.push(IVec2::new(size.width, dy));
-            }
+            // Find rightmost block (max x)
+            if let Some(rightmost) = item.shape.iter().max_by_key(|p| p.x) {
+                let candidate_offset = *rightmost + IVec2::new(1, 0);
 
-            // Check if valid
-            if grid_state.can_place_item(&extension_shape, IVec2::new(pos.0.x, pos.0.y), 0, Some(entity), false) {
-                 // Update Grid State
-                 for offset in &extension_shape {
-                     let new_cell_pos = IVec2::new(pos.0.x, pos.0.y) + *offset;
-                     if let Some(slot) = grid_state.slots.get_mut(&new_cell_pos) {
-                         slot.occupier = Some(entity);
+                // Construct a temporary single-block shape for validation
+                let extension_shape = vec![candidate_offset];
+
+                // Check if valid using the grid logic
+                // Note: We check with the item's current rotation and position
+                if grid_state.can_place_item(&extension_shape, pos.0, rot.0, Some(entity), false) {
+                     // Apply mutation
+                     item.shape.push(candidate_offset);
+
+                     // We must trigger a rebuild of the grid to reflect this change
+                     // However, we are iterating.
+                     // Ideally we should emit an event or batch these.
+                     // For now, we manually update the slot if we can find it,
+                     // but grid_state.rebuild() is the safest way to ensure consistency.
+                     // Since we can't easily call rebuild inside the query loop (borrow checker),
+                     // we relies on the fact that inventory systems rebuild often, or we update the slot directly.
+
+                     // Get absolute position of the new block
+                     let rotated_offset = InventoryGridState::get_rotated_shape(&extension_shape, rot.0);
+                     // wait, get_rotated_shape returns a vector.
+
+                     for offset in rotated_offset {
+                        let cell_pos = pos.0 + offset;
+                        if let Some(slot) = grid_state.slots.get_mut(&cell_pos) {
+                            slot.occupier = Some(entity);
+                        }
                      }
-                 }
 
-                 // Update Component
-                 size.width += 1;
-                 // NOTE: Real implementation should update ItemDefinition.shape too if we want it to persist properly
-                 // But ItemDefinition is shared. We'd need a dynamic ItemShape component.
-                 // For now, this is enough to satisfy the compiler.
-                 info!("Item grew to {:?}", *size);
-            } else {
-                 info!("Item tried to mutate but had no space.");
+                     info!("Item mutated! New shape len: {}", item.shape.len());
+                } else {
+                     info!("Item tried to mutate but had no space.");
+                }
             }
         }
     }
